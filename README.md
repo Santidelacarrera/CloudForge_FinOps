@@ -38,7 +38,6 @@ flowchart LR
 | Analítica | Python + FastAPI (sin estado) sobre un núcleo Python sin dependencias | `analytics/` |
 | Almacenamiento | PostgreSQL 16 con RLS por organización | `db/schema.sql` |
 | Proveedores | Cloudflare (Workers KV, adaptador) y LocalCloud (desarrollo); contrato común `CloudProvider` | `api/src/cloudflare.ts`, `api/src/provider.ts` |
-| Proveedores | Cloudflare (Workers KV, adaptador) y LocalCloud (desarrollo); contrato común `CloudProvider` | `api/src/cloudflare.ts`, `api/src/provider.ts` |
 | Proveedor cloud de desarrollo | LocalCloud: API HTTP gratuita y local con facturación, recursos, token de solo lectura y token de escritura acotado | `providers/localcloud/` |
 | Infraestructura | Docker Compose (dev). Ejemplo opcional de roles de mínimo privilegio para AWS en Terraform (no se usa) | `docker-compose.yml`, `infra/examples/aws-terraform/` |
 
@@ -82,20 +81,6 @@ Adaptador `CloudflareProvider` para **Workers KV**: detecta namespaces **sin nin
 
 Qué es real y qué no:
 * **No verificado contra la API real de Cloudflare**: desde el entorno de desarrollo no hay acceso a `api.cloudflare.com` ni a su documentación. El adaptador sigue el formato de la API que conozco y se probó contra un mock (`providers/cloudflare-mock/`, no es Cloudflare). El script de humo existe precisamente para comprobarlo.
-* El plan gratuito **no tiene facturación**: el ahorro es 0 USD (higiene de inventario) salvo que fijes `CLOUDFLARE_KV_EST_USD_PER_DAY` (estimación explícita por namespace y día); `connectors/sync` importa esas filas estimadas.
-* Los tokens de Cloudflare no admiten condiciones por etiqueta, así que no existe la guarda del proveedor de LocalCloud; el adaptador **vuelve a comprobar que el namespace sigue vacío justo antes de borrar** y la aprobación humana es el control principal.
-* Solo Workers KV; Workers, R2, D1 y DNS no están implementados.
-
-## Cloudflare (plan gratuito)
-
-Adaptador `CloudflareProvider` para **Workers KV**: detecta namespaces **sin ninguna clave** (recomendación de borrado con evidencia), genera el plan dry-run, espera la aprobación humana y solo entonces borra con un token de escritura distinto.
-
-1. Crea **dos API tokens** en Cloudflare, ambos limitados a tu cuenta: uno con `Workers KV Storage: Read` y otro con `Workers KV Storage: Edit`.
-2. Variables: `PROVIDER_KIND=cloudflare`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_READ_TOKEN`, `CRED_CRED_REMEDIATION_SCOPED=<token Edit>`.
-3. **Valida primero en solo lectura** (solo hace GET): `CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_READ_TOKEN=... node scripts/cloudflare-smoke.mjs`.
-
-Qué es real y qué no:
-* **No verificado contra la API real de Cloudflare**: desde el entorno de desarrollo no hay acceso a `api.cloudflare.com` ni a su documentación. El adaptador sigue el formato documentado de la API que conozco y se probó contra un mock (`providers/cloudflare-mock/`, no es Cloudflare). El script de humo existe precisamente para comprobarlo.
 * El plan gratuito **no tiene facturación**: el ahorro es 0 USD (higiene de inventario) salvo que fijes `CLOUDFLARE_KV_EST_USD_PER_DAY` (estimación explícita por namespace y día); `connectors/sync` importa esas filas estimadas.
 * Los tokens de Cloudflare no admiten condiciones por etiqueta, así que no existe la guarda del proveedor de LocalCloud; el adaptador **vuelve a comprobar que el namespace sigue vacío justo antes de borrar** y la aprobación humana es el control principal.
 * Solo Workers KV; Workers, R2, D1 y DNS no están implementados.
