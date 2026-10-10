@@ -1,0 +1,17 @@
+{
+  "id": "rightsize-with-approval",
+  "name": "Right-size an over-provisioned instance (human approval required)",
+  "trigger": { "type": "recommendation.created", "filter": { "kind": "rightsize", "minMonthlySavingsUsd": 100 } },
+  "nodes": [
+    { "id": "plan", "type": "simulate", "params": { "simulator": "rightsize" } },
+    { "id": "approve", "type": "approval", "params": { "planFrom": "plan", "requiredRole": "approver", "allowSelfApproval": false } },
+    { "id": "apply", "type": "apply_plan", "credentialRef": "cred/prod-remediation", "timeoutMs": 60000,
+      "retry": { "maxAttempts": 3, "backoffMs": 1000, "factor": 2 }, "params": { "planFrom": "plan" } },
+    { "id": "done", "type": "notify", "params": { "message": "Applied {{outputs.plan.action}} on {{input.resource}}" } }
+  ],
+  "edges": [
+    { "from": "plan", "to": "approve" },
+    { "from": "approve", "to": "apply" },
+    { "from": "apply", "to": "done" }
+  ]
+}

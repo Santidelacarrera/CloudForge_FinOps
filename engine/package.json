@@ -1,0 +1,9 @@
+{
+  "name": "@cloudforge/engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CloudForge FinOps workflow engine: durable steps, retries, idempotency, human approval gate",
+  "scripts": { "test": "node --test \"test/*.test.js\"" },
+  "engines": { "node": ">=20" }
+}

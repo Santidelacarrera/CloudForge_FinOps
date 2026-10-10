@@ -1,0 +1,25 @@
+{
+  "injected_anomalies": [
+    {
+      "series": "EC2",
+      "date": "2026-09-12",
+      "kind": "spike",
+      "factor": 3.0,
+      "note": "autoscaling runaway"
+    },
+    {
+      "series": "S3",
+      "date": "2026-09-20",
+      "kind": "spike",
+      "factor": 4.0,
+      "note": "unexpected cross-region replication"
+    }
+  ],
+  "expected_duplicates": 1,
+  "expected_rejected": 2,
+  "fx_rates": {
+    "EUR": 1.1,
+    "USD": 1.0
+  },
+  "orphan_resource": "vol-0orphan01"
+}
