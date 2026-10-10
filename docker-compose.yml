@@ -1,0 +1,26 @@
+# Development stack. DEV-ONLY credentials below; do not reuse them anywhere real.
+services:
+  postgres:
+    image: postgres:16
+    environment: { POSTGRES_PASSWORD: dev-only-owner-password, POSTGRES_DB: cloudforge }
+    volumes: ["./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro", "pgdata:/var/lib/postgresql/data"]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U postgres"], interval: 3s, retries: 20 }
+  redis:
+    image: redis:7
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 3s, retries: 20 }
+  analytics:
+    build: { context: ., dockerfile: analytics/Dockerfile }
+  api:
+    build: { context: ., dockerfile: api/Dockerfile }
+    environment:
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET (>=16 chars), e.g. export JWT_SECRET=$(openssl rand -hex 24)}
+      DATABASE_URL: postgres://cloudforge_app:cloudforge_app@postgres:5432/cloudforge
+      REDIS_URL: redis://redis:6379
+      ANALYTICS_URL: http://analytics:8000
+    depends_on: { postgres: { condition: service_healthy }, redis: { condition: service_healthy }, analytics: { condition: service_started } }
+    ports: ["3000:3000"]
+  web:
+    build: { context: ., dockerfile: web/Dockerfile }
+    depends_on: [api]
+    ports: ["8080:80"]
+volumes: { pgdata: {} }
