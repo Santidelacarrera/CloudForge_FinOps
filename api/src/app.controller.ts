@@ -100,6 +100,15 @@ export class AppController {
     return { importId, received: out.records.length, inserted, already_present: out.records.length - inserted, rejected: out.rejected, duplicates: out.duplicates, triggered };
   }
 
+  /** Pulls billing from the configured provider with the READ-ONLY credential and imports it like any CSV. */
+  @Post('connectors/sync') @Roles('analyst')
+  async sync(@Req() req: Req_, @Body() b: { from?: string; to?: string; rates?: Record<string, number> }) {
+    if (!this.core.provider) throw new BadRequestException('no provider configured (set PROVIDER_URL)');
+    if ((b?.from && !DATE.test(b.from)) || (b?.to && !DATE.test(b.to))) throw new BadRequestException('from/to must be YYYY-MM-DD');
+    const csv = await this.core.provider.billingCsv(b?.from, b?.to);
+    return this.importCosts(req, { name: 'provider-sync', csv, rates: b?.rates ?? {} });
+  }
+
   // ---------- analytics ----------
   @Get('costs/summary')
   costsSummary(@Req() req: Req_, @Query('group_by') g = 'service', @Query('from') from?: string, @Query('to') to?: string) {

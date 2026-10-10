@@ -26,12 +26,7 @@ jobs:
       - run: python3 datasets/generate_dataset.py && git diff --exit-code datasets
       - run: python3 -I -m unittest discover -s analytics/tests -v
       - run: PGPASSWORD=postgres psql -h localhost -U postgres -d cloudforge -v ON_ERROR_STOP=1 -f db/schema.sql
+      - run: node --test providers/localcloud/localcloud.test.mjs
       - run: cd engine && npm install && npm test
       - run: cd api && npm install && npx tsc --noEmit && npm test
       - run: cd web && npm install && npm run build
-  terraform:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
-      - run: cd infra/terraform && terraform fmt -check -recursive && terraform init -backend=false && terraform validate

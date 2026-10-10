@@ -37,7 +37,8 @@ flowchart LR
 | Motor de ejecución | Node.js + BullMQ + Redis; estado en PostgreSQL | `engine/` |
 | Analítica | Python + FastAPI (sin estado) sobre un núcleo Python sin dependencias | `analytics/` |
 | Almacenamiento | PostgreSQL 16 con RLS por organización | `db/schema.sql` |
-| Infraestructura | Docker Compose (dev); Terraform: roles IAM de mínimo privilegio + bucket | `docker-compose.yml`, `infra/terraform/` |
+| Proveedor cloud de desarrollo | LocalCloud: API HTTP gratuita y local con facturación, recursos, token de solo lectura y token de escritura acotado | `providers/localcloud/` |
+| Infraestructura | Docker Compose (dev). Ejemplo opcional de roles de mínimo privilegio para AWS en Terraform (no se usa) | `docker-compose.yml`, `infra/examples/aws-terraform/` |
 
 ## Diagrama de estados del motor
 
@@ -62,20 +63,20 @@ El estado se persiste tras cada paso, así que `resume()` tras un reinicio conti
 * **Ingesta**: CSV, monedas mixtas con tipos de cambio explícitos, duplicados reportados, filas inválidas rechazadas con motivo, recursos sin etiqueta `owner` marcados. Importación idempotente (reimportar no duplica). Cada total devuelve los `record_id` y líneas del CSV origen.
 * **Anomalías**: mediana móvil + MAD; cada hallazgo incluye método, ventana, umbral y explicación.
 * **Pronóstico**: acumulado + media de la ventana × días restantes, intervalos 80/95 %, supuestos, comparación con presupuesto.
-* **Recomendaciones y simulación**: heurística de recursos huérfanos con evidencia; `simulate` genera un plan estilo Terraform (`1 to destroy`), ahorro **bruto**, riesgos y supuestos, sin ningún acceso a la nube.
+* **Recomendaciones y simulación**: heurística de recursos huérfanos con evidencia; `simulate` genera un plan estilo Terraform (`1 to destroy`), ahorro **bruto**, riesgos y supuestos, sin ningún acceso al proveedor.
 * **Motor**: versiones inmutables, reintentos con backoff, timeouts, idempotencia por evento y por paso, aprobación ligada al hash del plan, enmascarado de secretos, nodos IA con esquema estricto, guardia SSRF. Cola BullMQ con `jobId` determinista.
 * **Seguridad**: ver [docs/SECURITY.md](docs/SECURITY.md) (cada control con su código y su test).
 * **Disparadores automáticos**: un flujo con `trigger.type: anomaly.detected` (y filtro por serie/importe/dirección) se inicia solo tras cada importación; `eventId = serie+fecha`, así reimportar no repite ejecuciones. También `POST /api/v1/triggers/evaluate`.
-* **Conector AWS Cost Explorer (solo lectura)**: `analytics/cloudforge_analytics/connectors/aws_ce.py` pagina `get_cost_and_usage`, solo permite ese método y genera el CSV estándar. Probado con un cliente simulado; **no probado contra AWS real** (requiere `boto3` y el rol de análisis de Terraform).
+* **Proveedor cloud + conector** (`providers/localcloud/`, `api/src/provider.ts`): LocalCloud es una API gratuita que corre en local y aplica los controles de un proveedor real: token de **solo lectura** para facturación/recursos y un token de **escritura acotado** que solo puede etiquetar `cloudforge:approved-for-deletion` y borrar recursos con esa etiqueta y sin adjuntar, con `Idempotency-Key`. `POST /api/v1/connectors/sync` importa su facturación con el token de lectura; `apply_plan` borra de verdad el recurso con el token de escritura (referenciado por `credentialRef`, nunca visible en estado ni auditoría). Probado de extremo a extremo: no hay ninguna llamada de escritura antes de la aprobación, se borra solo el recurso aprobado y una segunda ejecución falla sin reintentos.
 * **Dataset sintético** (`datasets/`) con anomalías controladas (`ground_truth.json`) y ejemplos de flujos en `examples/workflows/` (JSON y YAML).
 
 ## Limitaciones
 
-* **Sin conector de escritura real.** `apply_plan` usa un conector *demo* que registra la acción y no llama a ningún proveedor. El conector de lectura de AWS solo está probado con fixtures.
+* **Ningún proveedor comercial.** El conector funciona de verdad pero contra LocalCloud; no puedo crear cuentas ni credenciales en un proveedor real. Para uno real hay que escribir un adaptador que cumpla el mismo contrato (`HttpProvider`: facturación por lectura, borrado con etiqueta de aprobación e idempotencia). Sin `PROVIDER_URL`, `apply_plan` corre en modo *demo* (registra y no llama a nada).
 * Los flujos son cadenas lineales (sin ramas). Solo hay disparador por anomalía (no por presupuesto).
 * El nodo `ai_classify` falla cerrado si no hay conector LLM configurado; el API no incluye ninguno.
 * Las anomalías y pronósticos se calculan bajo demanda; no se persisten como entidades.
-* No hay gestión de usuarios ni emisor JWT (los tokens se acuñan con `npm run token`); no hay MinIO/S3 en uso (el bucket de Terraform es solo infraestructura de ejemplo).
+* No hay gestión de usuarios ni emisor JWT (los tokens se acuñan con `npm run token`); no hay almacenamiento de objetos en uso (los CSV se guardan normalizados en PostgreSQL).
 * Las imágenes Docker **no se han construido** (sin daemon en el entorno de desarrollo); sí se validó `docker compose config` y los pasos del Dockerfile de la API manualmente. El CI de GitHub no se ha ejecutado todavía.
 
 ## Ejecutar
@@ -85,6 +86,7 @@ El estado se persiste tras cada paso, así que `resume()` tras un reinicio conti
 export JWT_SECRET=$(openssl rand -hex 24)
 docker compose up --build            # UI en :8080, API en :3000
 JWT_SECRET=$JWT_SECRET API=http://127.0.0.1:3000 node scripts/seed-demo.mjs   # importa datos, publica el flujo, imprime tokens
+# Para sincronizar desde LocalCloud (compose ya lo levanta): POST /api/v1/connectors/sync con un token analyst
 ```
 Pega un token (analyst / operator / approver) en la UI.
 
@@ -100,10 +102,10 @@ export JWT_SECRET=... DATABASE_URL=postgres://cloudforge_app:cloudforge_app@loca
 ### Tests
 ```bash
 export CLOUDFORGE_PG_URL=postgres://cloudforge_app:cloudforge_app@localhost:5432/cloudforge REDIS_URL=redis://localhost:6379
-python3 -I -m unittest discover -s analytics/tests -v   # 19 tests (núcleo, FastAPI, conector)
+python3 -I -m unittest discover -s analytics/tests -v   # 16 tests (núcleo y FastAPI)
 (cd engine && npm test)                                 # 20 tests (incluye PostgreSQL/BullMQ reales)
-(cd api && npm test)                                    # 7 tests e2e: API + Postgres + Redis + FastAPI reales
-(cd infra/terraform && terraform init -backend=false && terraform validate)
+(cd api && npm test)                                    # 8 tests e2e: API + Postgres + Redis + FastAPI reales
+node --test providers/localcloud/localcloud.test.mjs   # 3 tests del proveedor local
 ```
 Sin `CLOUDFORGE_PG_URL`/`REDIS_URL` los tests de integración se omiten.
 

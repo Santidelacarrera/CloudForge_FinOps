@@ -154,7 +154,7 @@ test('anomaly triggers start matching workflows automatically and idempotently',
     return list.length === 2 && list.every((e: any) => e.status === 'SUCCEEDED');
   });
   const ex = (await call('GET', `/api/v1/executions/${imp.body.triggered[0].executionId}`, dev)).body;
-  assert.match(ex.outputs.alert.text, /Cost spike on (EC2|S3)/);
+  assert.match(ex.outputs.alert.text, /Cost spike on (Compute|ObjectStorage)/);
   // same data again: nothing new is inserted and no extra execution appears
   const again = await call('POST', '/api/v1/cost-imports', ana, { csv, rates: truth.fx_rates });
   assert.equal(again.body.triggered.length, 0);

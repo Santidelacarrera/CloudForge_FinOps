@@ -7,17 +7,23 @@ const { PgStore } = require('@cloudforge/engine/pg-store');
 const { ExecutionQueue } = require('@cloudforge/engine/queue');
 import { buildDeletePlan } from './plans';
 import { listRecommendations } from './finance';
+import { HttpProvider } from './provider';
 
 /** Wires store, engine, queue and the (demo) connectors. */
 @Injectable()
 export class CoreService implements OnModuleInit, OnModuleDestroy {
   store: any; engine: any; queue: any; redis?: IORedis;
+  provider?: HttpProvider;
   analyticsUrl = process.env.ANALYTICS_URL ?? 'http://127.0.0.1:8000';
 
   async onModuleInit() {
     const url = process.env.DATABASE_URL;
     if (!url) throw new Error('DATABASE_URL is required');
     this.store = new PgStore(url);
+    if (process.env.PROVIDER_URL) {
+      if (!process.env.PROVIDER_READ_TOKEN) throw new Error('PROVIDER_READ_TOKEN is required with PROVIDER_URL');
+      this.provider = new HttpProvider(process.env.PROVIDER_URL, process.env.PROVIDER_READ_TOKEN);
+    }
     this.engine = new Engine({
       store: this.store,
       credentials: (ref: string) => process.env[`CRED_${ref.replace(/\W/g, '_').toUpperCase()}`],
@@ -31,10 +37,11 @@ export class CoreService implements OnModuleInit, OnModuleDestroy {
             return buildDeletePlan(rec);
           },
         },
-        // DEMO connector: records the remediation in our DB, never calls a cloud provider.
-        // Replace with a real connector that honours idempotencyKey and uses the scoped credential.
+        // With PROVIDER_URL: real calls to the provider using the scoped remediation credential
+        // (CRED_CRED_REMEDIATION_SCOPED). Without it: DEMO mode records the action and calls nothing.
         cloud: {
-          apply: async (plan: any, { idempotencyKey }: { idempotencyKey: string }) => {
+          apply: async (plan: any, { idempotencyKey, credential }: { idempotencyKey: string; credential?: string }) => {
+            if (this.provider) return this.provider.deleteResource(plan.resource, credential, idempotencyKey);
             return { applied: true, mode: 'demo-no-cloud-call', resource: plan.resource, idempotencyKey };
           },
         },

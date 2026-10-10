@@ -14,19 +14,19 @@ START, DAYS = date(2026, 8, 1), 61  # Aug 1 .. Sep 30
 random.seed(42)
 
 SERVICES = {  # service: (base daily USD, project, env, region)
-    "EC2": (120, "checkout", "prod", "us-east-1"),
-    "RDS": (80, "checkout", "prod", "us-east-1"),
-    "S3": (30, "data-lake", "prod", "eu-west-1"),
-    "Lambda": (15, "notifications", "dev", "us-east-1"),
-    "CloudWatch": (12, "platform", "prod", "us-east-1"),
+    "Compute": (120, "checkout", "prod", "region-a"),
+    "Database": (80, "checkout", "prod", "region-a"),
+    "ObjectStorage": (30, "data-lake", "prod", "region-b"),
+    "Functions": (15, "notifications", "dev", "region-a"),
+    "Monitoring": (12, "platform", "prod", "region-a"),
 }
 INJECTED = [
-    {"series": "EC2", "date": "2026-09-12", "kind": "spike", "factor": 3.0,
+    {"series": "Compute", "date": "2026-09-12", "kind": "spike", "factor": 3.0,
      "note": "autoscaling runaway"},
-    {"series": "S3", "date": "2026-09-20", "kind": "spike", "factor": 4.0,
+    {"series": "ObjectStorage", "date": "2026-09-20", "kind": "spike", "factor": 4.0,
      "note": "unexpected cross-region replication"},
 ]
-EUR_SERVICE = "S3"  # billed in EUR (rate 1.10 USD/EUR)
+EUR_SERVICE = "ObjectStorage"  # billed in EUR (rate 1.10 USD/EUR)
 
 
 def main():
@@ -41,15 +41,15 @@ def main():
             cur = "EUR" if svc == EUR_SERVICE else "USD"
             if cur == "EUR":
                 cost /= 1.10
-            owner = "" if svc == "Lambda" else "owner=team-" + proj  # Lambda is untagged
+            owner = "" if svc == "Functions" else "owner=team-" + proj  # Functions is untagged
             rows.append([d.isoformat(), "111111111111", proj, svc, region, env,
                          f"{svc.lower()}-main", f"{cost:.2f}", cur, owner])
         # orphaned volumes: small, steady, untagged
-        rows.append([d.isoformat(), "111111111111", "unassigned", "EBS", "us-east-1", "unknown",
+        rows.append([d.isoformat(), "111111111111", "unassigned", "BlockStorage", "region-a", "unknown",
                      "vol-0orphan01", "4.80", "USD", ""])
     rows.append(rows[40][:])  # exact duplicate
-    rows.append(["2026-09-05", "111111111111", "x", "EC2", "us-east-1", "prod", "i-x", "abc", "USD", ""])  # bad cost
-    rows.append(["2026-09-05", "111111111111", "x", "EC2", "us-east-1", "prod", "i-y", "9.00", "JPY", ""])  # unknown cur
+    rows.append(["2026-09-05", "111111111111", "x", "Compute", "region-a", "prod", "i-x", "abc", "USD", ""])  # bad cost
+    rows.append(["2026-09-05", "111111111111", "x", "Compute", "region-a", "prod", "i-y", "9.00", "JPY", ""])  # unknown cur
     with open(OUT / "sample_billing.csv", "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["date", "account_id", "project", "service", "region", "environment",

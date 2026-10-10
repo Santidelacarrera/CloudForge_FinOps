@@ -1,14 +1,14 @@
 {
   "injected_anomalies": [
     {
-      "series": "EC2",
+      "series": "Compute",
       "date": "2026-09-12",
       "kind": "spike",
       "factor": 3.0,
       "note": "autoscaling runaway"
     },
     {
-      "series": "S3",
+      "series": "ObjectStorage",
       "date": "2026-09-20",
       "kind": "spike",
       "factor": 4.0,
