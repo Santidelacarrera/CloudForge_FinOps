@@ -65,16 +65,18 @@ El estado se persiste tras cada paso, así que `resume()` tras un reinicio conti
 * **Recomendaciones y simulación**: heurística de recursos huérfanos con evidencia; `simulate` genera un plan estilo Terraform (`1 to destroy`), ahorro **bruto**, riesgos y supuestos, sin ningún acceso a la nube.
 * **Motor**: versiones inmutables, reintentos con backoff, timeouts, idempotencia por evento y por paso, aprobación ligada al hash del plan, enmascarado de secretos, nodos IA con esquema estricto, guardia SSRF. Cola BullMQ con `jobId` determinista.
 * **Seguridad**: ver [docs/SECURITY.md](docs/SECURITY.md) (cada control con su código y su test).
+* **Disparadores automáticos**: un flujo con `trigger.type: anomaly.detected` (y filtro por serie/importe/dirección) se inicia solo tras cada importación; `eventId = serie+fecha`, así reimportar no repite ejecuciones. También `POST /api/v1/triggers/evaluate`.
+* **Conector AWS Cost Explorer (solo lectura)**: `analytics/cloudforge_analytics/connectors/aws_ce.py` pagina `get_cost_and_usage`, solo permite ese método y genera el CSV estándar. Probado con un cliente simulado; **no probado contra AWS real** (requiere `boto3` y el rol de análisis de Terraform).
 * **Dataset sintético** (`datasets/`) con anomalías controladas (`ground_truth.json`) y ejemplos de flujos en `examples/workflows/` (JSON y YAML).
 
 ## Limitaciones
 
-* **Sin conector cloud real.** `apply_plan` usa un conector *demo* que registra la acción y no llama a ningún proveedor. Tampoco hay conectores de lectura de APIs de costes (fase 5): solo CSV.
-* Los flujos son cadenas lineales (sin ramas ni disparadores automáticos; se inician por API).
+* **Sin conector de escritura real.** `apply_plan` usa un conector *demo* que registra la acción y no llama a ningún proveedor. El conector de lectura de AWS solo está probado con fixtures.
+* Los flujos son cadenas lineales (sin ramas). Solo hay disparador por anomalía (no por presupuesto).
+* El nodo `ai_classify` falla cerrado si no hay conector LLM configurado; el API no incluye ninguno.
 * Las anomalías y pronósticos se calculan bajo demanda; no se persisten como entidades.
 * No hay gestión de usuarios ni emisor JWT (los tokens se acuñan con `npm run token`); no hay MinIO/S3 en uso (el bucket de Terraform es solo infraestructura de ejemplo).
 * Las imágenes Docker **no se han construido** (sin daemon en el entorno de desarrollo); sí se validó `docker compose config` y los pasos del Dockerfile de la API manualmente. El CI de GitHub no se ha ejecutado todavía.
-* Carrera conocida en decisiones de aprobación simultáneas (ver SECURITY.md).
 
 ## Ejecutar
 
@@ -98,9 +100,9 @@ export JWT_SECRET=... DATABASE_URL=postgres://cloudforge_app:cloudforge_app@loca
 ### Tests
 ```bash
 export CLOUDFORGE_PG_URL=postgres://cloudforge_app:cloudforge_app@localhost:5432/cloudforge REDIS_URL=redis://localhost:6379
-python3 -I -m unittest discover -s analytics/tests -v   # 16 tests (núcleo + FastAPI)
-(cd engine && npm test)                                 # 18 tests (16 + PostgreSQL/BullMQ reales)
-(cd api && npm test)                                    # 6 tests e2e: API + Postgres + Redis + FastAPI reales
+python3 -I -m unittest discover -s analytics/tests -v   # 19 tests (núcleo, FastAPI, conector)
+(cd engine && npm test)                                 # 20 tests (incluye PostgreSQL/BullMQ reales)
+(cd api && npm test)                                    # 7 tests e2e: API + Postgres + Redis + FastAPI reales
 (cd infra/terraform && terraform init -backend=false && terraform validate)
 ```
 Sin `CLOUDFORGE_PG_URL`/`REDIS_URL` los tests de integración se omiten.

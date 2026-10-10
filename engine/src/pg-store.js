@@ -23,6 +23,15 @@ export class PgStore {
     const r = await this.tx(orgId, (c) => c.query('SELECT doc FROM engine_documents WHERE org_id=$1 AND kind=$2 AND id=$3', [orgId, kind, id]));
     return r.rows[0]?.doc;
   }
+  /** Atomic read-modify-write using a row lock: concurrent updaters are serialised. */
+  async update(kind, orgId, id, fn) {
+    return this.tx(orgId, async (c) => {
+      const r = await c.query('SELECT doc FROM engine_documents WHERE org_id=$1 AND kind=$2 AND id=$3 FOR UPDATE', [orgId, kind, id]);
+      const next = await fn(r.rows[0]?.doc);
+      await c.query('UPDATE engine_documents SET doc=$4 WHERE org_id=$1 AND kind=$2 AND id=$3', [orgId, kind, id, JSON.stringify(next)]);
+      return next;
+    });
+  }
   async has(kind, orgId, id) { return (await this.get(kind, orgId, id)) !== undefined; }
   async list(kind, orgId) {
     const r = await this.tx(orgId, (c) => c.query('SELECT doc FROM engine_documents WHERE org_id=$1 AND kind=$2 ORDER BY seq', [orgId, kind]));

@@ -11,6 +11,13 @@ import { dailySeries, listRecommendations, summary } from './finance';
 const { PermanentError, SafetyError, hash } = require('@cloudforge/engine');
 
 type Req_ = { user: AuthUser };
+function matches(filter: any, a: any): boolean {
+  if (!filter) return true;
+  if (filter.series && filter.series !== a.series) return false;
+  if (typeof filter.minDelta === 'number' && Math.abs(a.delta) < filter.minDelta) return false;
+  if (filter.direction && filter.direction !== a.direction) return false;
+  return true;
+}
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -43,6 +50,33 @@ export class AppController {
     return json;
   }
 
+  /**
+   * Starts every workflow whose trigger is `anomaly.detected` and matches a detected anomaly.
+   * eventId = (series, date): re-importing the same data never starts a second execution.
+   */
+  private async evaluateTriggers(orgId: string, actor: string) {
+    const series = await dailySeries(this.core.store, orgId, 'service');
+    const anomalies: any[] = await this.analytics('/v1/anomalies', { series });
+    const latest = new Map<string, any>();
+    for (const w of await this.core.store.list('workflowVersions', orgId)) {
+      if (!latest.has(w.id) || latest.get(w.id).version < w.version) latest.set(w.id, w);
+    }
+    const started: { executionId: string; workflow: string; anomaly: string }[] = [];
+    for (const w of latest.values()) {
+      if (w.trigger?.type !== 'anomaly.detected') continue;
+      for (const a of anomalies.filter((x) => matches(w.trigger.filter, x))) {
+        const ref = `${w.id}@${w.version}`;
+        const eventId = `anomaly:${a.series}:${a.date}`;
+        await this.core.startExecution(orgId, ref, { anomaly: a, series: a.series, date: a.date, delta: a.delta }, { eventId, actor: `trigger:${w.id}` });
+        started.push({ executionId: this.core.engine.executionId(ref, eventId), workflow: ref, anomaly: eventId });
+      }
+    }
+    return started;
+  }
+
+  @Post('triggers/evaluate') @Roles('operator') @HttpCode(200)
+  evaluate(@Req() req: Req_) { return this.evaluateTriggers(req.user.orgId, req.user.id); }
+
   // ---------- ingestion ----------
   @Post('cost-imports') @Roles('analyst')
   async importCosts(@Req() req: Req_, @Body() b: { name?: string; csv?: string; rates?: Record<string, number>; base_currency?: string }) {
@@ -62,7 +96,8 @@ export class AppController {
          ON CONFLICT (org_id, record_id) DO NOTHING`, [orgId, importId, JSON.stringify(out.records)]);
       return r.rowCount as number;
     });
-    return { importId, received: out.records.length, inserted, already_present: out.records.length - inserted, rejected: out.rejected, duplicates: out.duplicates };
+    const triggered = inserted > 0 ? await this.evaluateTriggers(orgId, req.user.id) : [];
+    return { importId, received: out.records.length, inserted, already_present: out.records.length - inserted, rejected: out.rejected, duplicates: out.duplicates, triggered };
   }
 
   // ---------- analytics ----------

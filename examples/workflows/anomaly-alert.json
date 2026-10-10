@@ -1,0 +1,10 @@
+{
+  "id": "anomaly-alert",
+  "name": "Alert on any cost spike above 50 USD (runs automatically after each import)",
+  "trigger": { "type": "anomaly.detected", "filter": { "direction": "spike", "minDelta": 50 } },
+  "nodes": [
+    { "id": "alert", "type": "notify", "retry": { "maxAttempts": 5, "backoffMs": 500, "factor": 2 },
+      "params": { "message": "Cost spike on {{input.series}} on {{input.date}}: +{{input.delta}} USD vs baseline" } }
+  ],
+  "edges": []
+}

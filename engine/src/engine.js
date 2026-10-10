@@ -159,6 +159,7 @@ export class Engine {
         return await c.http(p.url, { execId: exec.id, idempotencyKey, body: p.body ?? {} });
       }
       case 'ai_classify': {
+        if (!c.llm) throw new PermanentError('no LLM connector configured');
         const maxCalls = p.maxCalls ?? 1;
         let last;
         for (let i = 0; i < maxCalls; i += 1) {
@@ -203,15 +204,16 @@ export class Engine {
 
   /** Records the human decision. Roles, tenant and separation of duties are enforced here. */
   async decide(orgId, approvalId, user, decision, comment = '', { defer = false } = {}) {
-    const a = await this.store.get('approvals', orgId, approvalId);
-    if (!a) throw new PermanentError('unknown approval'); // also hit for other tenants' ids
-    if (a.status !== 'pending') throw new PermanentError(`approval already ${a.status}`);
-    if (user.orgId !== orgId) throw new SafetyError('user belongs to a different organization');
-    if (!user.roles?.includes(a.requiredRole)) throw new SafetyError(`requires role ${a.requiredRole}`);
-    if (!a.allowSelfApproval && user.id === a.requestedBy) throw new SafetyError('requester cannot approve their own plan');
     if (!['approved', 'rejected'].includes(decision)) throw new PermanentError('decision must be approved|rejected');
-    Object.assign(a, { status: decision, decidedBy: user.id, decidedAt: this.now(), comment });
-    await this.store.put('approvals', orgId, a.id, a);
+    // Check-and-set inside one atomic update so two concurrent decisions cannot both win.
+    const a = await this.store.update('approvals', orgId, approvalId, (cur) => {
+      if (!cur) throw new PermanentError('unknown approval'); // also hit for other tenants' ids
+      if (cur.status !== 'pending') throw new PermanentError(`approval already ${cur.status}`);
+      if (user.orgId !== orgId) throw new SafetyError('user belongs to a different organization');
+      if (!user.roles?.includes(cur.requiredRole)) throw new SafetyError(`requires role ${cur.requiredRole}`);
+      if (!cur.allowSelfApproval && user.id === cur.requestedBy) throw new SafetyError('requester cannot approve their own plan');
+      return { ...cur, status: decision, decidedBy: user.id, decidedAt: this.now(), comment };
+    });
     await this.audit(orgId, `approval.${decision}`, { approvalId, by: user.id, planHash: a.planHash });
     return defer ? a : this.resume(orgId, a.executionId);
   }

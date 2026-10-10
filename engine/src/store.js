@@ -7,6 +7,14 @@ export class MemoryStore {
     const v = this._k(kind)[`${orgId}/${id}`];
     return v === undefined ? undefined : structuredClone(v);
   }
+  /** Atomic read-modify-write. `fn` must be synchronous: no await between read and write. */
+  async update(kind, orgId, id, fn) {
+    const key = `${orgId}/${id}`;
+    const cur = this._k(kind)[key];
+    const next = fn(cur === undefined ? undefined : structuredClone(cur));
+    this._k(kind)[key] = structuredClone(next);
+    return next;
+  }
   async has(kind, orgId, id) { return `${orgId}/${id}` in this._k(kind); }
   async list(kind, orgId) {
     const prefix = `${orgId}/`;

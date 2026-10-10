@@ -15,6 +15,8 @@ Each control below names the code that enforces it and the test that proves it.
 | The organisation of a request comes only from the verified JWT, never from request parameters | `AuthGuard` | `tenant isolation over the API` |
 | JWT: HS256 only (rejects `alg: none`), constant-time signature check, expiry required, secret >= 16 chars or the server refuses to authenticate | `verifyJwt`, `AuthGuard` | `authentication: missing, forged and expired tokens are rejected` |
 | Audit entries are append-only: a DB trigger rejects UPDATE/DELETE | `db/schema.sql` (`forbid_audit_change`) | `postgres: ... immutable audit` |
+| Concurrent decisions on one approval: exactly one wins (atomic check-and-set; `SELECT ... FOR UPDATE` in Postgres) | `Store.update`, `Engine.decide` | `postgres: concurrent approvals — exactly one decision wins` |
+| The AWS Cost Explorer connector can only call `get_cost_and_usage` (method allow-list over the client) | `connectors/aws_ce.py` | `test_client_is_read_only` |
 | Decisions cannot be replayed; approver role, tenant and separation of duties are enforced by the engine behind the REST endpoint | `Engine.decide`, `EngineErrorFilter` (403/404/400) | `workflow pauses for approval; only an authorised other user can approve...` |
 | Cloud credentials: the analysis role is read-only; the remediation role is a separate role, disabled by default, limited to `ec2:DeleteVolume` on volumes tagged `cloudforge:approved-for-deletion`, with ExternalId | `infra/terraform/main.tf` | `terraform validate` in CI |
 | Secrets live outside workflow definitions (`credentialRef`), resolved at run time, masked in step logs, errors and audit | `redact`, `Engine.secrets` | `secrets are masked in logs and audit` |
@@ -29,7 +31,6 @@ Each control below names the code that enforces it and the test that proves it.
 ## Known limits (be honest)
 
 * There is **no real cloud connector**. The API ships a *demo* `apply` connector that records the remediation and never calls a cloud provider; the Terraform roles show the intended permissions. The webhook DNS check runs before the request; a production HTTP client must pin the resolved IP to avoid DNS-rebinding.
-* Two simultaneous `decide` calls on the same approval can race (read-then-write); use `SELECT ... FOR UPDATE` or a conditional update before multi-replica deployment.
 * Organisation rows are created lazily from the token issuer's claims; user/membership management and the JWT issuer are out of scope (tokens are minted with `npm run token`).
 * Idempotency of the external side effect relies on the connector honouring `idempotencyKey`. A crash between the cloud call and persisting the step result can re-invoke the connector with the same key.
 * The dev `docker-compose.yml` uses hard-coded database passwords; the images could not be built in the authoring environment (no Docker daemon).

@@ -204,3 +204,11 @@ test('webhook SSRF guard', async () => {
   await assert.rejects(assertSafeWebhook('https://[::1]/', ['::1'], dns), /private/);
   await assert.rejects(assertSafeWebhook('https://u:p@hooks.example.com/', allow, dns), /credentials/);
 });
+
+test('concurrent in-memory decisions: exactly one wins', async () => {
+  const { engine } = await setup();
+  await engine.start(ORG, 'rightsize-with-approval@1', { resource: 'i-1' }, { actor: requester.id });
+  const [ap] = await engine.store.list('approvals', ORG);
+  const r = await Promise.allSettled([engine.decide(ORG, ap.id, approver, 'approved'), engine.decide(ORG, ap.id, { ...approver, id: 'u-9' }, 'approved')]);
+  assert.equal(r.filter((x) => x.status === 'fulfilled').length, 1);
+});

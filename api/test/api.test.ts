@@ -141,3 +141,26 @@ test('tenant isolation over the API', { skip }, async () => {
   assert.deepEqual((await call('GET', '/api/v1/recommendations', other)).body, []);
   assert.equal((await call('POST', `/api/v1/recommendations/${recId}/simulate`, other)).status, 404);
 });
+
+test('anomaly triggers start matching workflows automatically and idempotently', { skip }, async () => {
+  const o = `org-trig-${Math.random().toString(36).slice(2, 7)}`;
+  const ana = tok('ana', ['analyst'], o); const dev = tok('dev', ['operator'], o);
+  const alert = JSON.parse(readFileSync(path.join(ROOT, 'examples/workflows/anomaly-alert.json'), 'utf8'));
+  assert.equal((await call('POST', '/api/v1/workflows', dev, alert)).status, 201);
+  const imp = await call('POST', '/api/v1/cost-imports', ana, { csv, rates: truth.fx_rates });
+  assert.equal(imp.body.triggered.length, truth.injected_anomalies.length);
+  await until(async () => {
+    const list = (await call('GET', '/api/v1/executions', dev)).body;
+    return list.length === 2 && list.every((e: any) => e.status === 'SUCCEEDED');
+  });
+  const ex = (await call('GET', `/api/v1/executions/${imp.body.triggered[0].executionId}`, dev)).body;
+  assert.match(ex.outputs.alert.text, /Cost spike on (EC2|S3)/);
+  // same data again: nothing new is inserted and no extra execution appears
+  const again = await call('POST', '/api/v1/cost-imports', ana, { csv, rates: truth.fx_rates });
+  assert.equal(again.body.triggered.length, 0);
+  await call('POST', '/api/v1/triggers/evaluate', dev);
+  await new Promise((r) => setTimeout(r, 500));
+  assert.equal((await call('GET', '/api/v1/executions', dev)).body.length, 2);
+  // analysts cannot evaluate triggers (operator only)
+  assert.equal((await call('POST', '/api/v1/triggers/evaluate', ana)).status, 403);
+});

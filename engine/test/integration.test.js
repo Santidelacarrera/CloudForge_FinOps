@@ -78,3 +78,21 @@ test('bullmq: idempotent enqueue, worker run, approval pause and resume', { skip
     assert.equal(applied.length, 1);
   } finally { await q.close(); await conn.quit(); await store.close(); }
 });
+
+test('postgres: concurrent approvals — exactly one decision wins', { skip: !PG }, async () => {
+  const org = `org-${uid()}`; const applied = [];
+  const store = new PgStore(PG);
+  const engine = mkEngine(store, applied);
+  await engine.publish(org, wf);
+  await engine.start(org, 'rightsize-with-approval@1', { resource: 'i-1' }, { actor: 'u-dev' });
+  const [ap] = await store.list('approvals', org);
+  const approverOrg = { ...approver, orgId: org };
+  const results = await Promise.allSettled([
+    engine.decide(org, ap.id, approverOrg, 'approved', '', { defer: true }),
+    engine.decide(org, ap.id, { ...approverOrg, id: 'u-2' }, 'rejected', '', { defer: true }),
+    engine.decide(org, ap.id, { ...approverOrg, id: 'u-3' }, 'approved', '', { defer: true }),
+  ]);
+  assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
+  assert.ok(results.filter((r) => r.status === 'rejected').every((r) => /already/.test(r.reason.message)));
+  await store.close();
+});
