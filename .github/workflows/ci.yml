@@ -1,0 +1,32 @@
+name: ci
+on: [push, pull_request]
+env:
+  CLOUDFORGE_PG_URL: postgres://cloudforge_app:cloudforge_app@localhost:5432/cloudforge
+  REDIS_URL: redis://localhost:6379
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: cloudforge }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U postgres" --health-interval 3s --health-retries 20
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - run: pip install -r analytics/requirements.txt
+      - run: python3 datasets/generate_dataset.py && git diff --exit-code datasets
+      - run: python3 -I -m unittest discover -s analytics/tests -v
+      - run: PGPASSWORD=postgres psql -h localhost -U postgres -d cloudforge -v ON_ERROR_STOP=1 -f db/schema.sql
+      - run: node --test providers/localcloud/localcloud.test.mjs
+      - run: cd engine && npm install && npm test
+      - run: cd api && npm install && npx tsc --noEmit && npm test
+      - run: cd web && npm install && npm run build

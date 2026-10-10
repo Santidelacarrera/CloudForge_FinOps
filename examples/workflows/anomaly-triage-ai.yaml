@@ -1,0 +1,27 @@
+# Triage a critical cost anomaly: AI classifies (schema-validated), then notifies.
+# The AI node can only produce data; it has no path to a destructive node.
+id: anomaly-triage-ai
+name: Critical anomaly triage
+trigger:
+  type: anomaly.detected
+  filter: { severity: critical }
+nodes:
+  - id: classify
+    type: ai_classify
+    params:
+      prompt: "Classify this cost anomaly and summarise it in one sentence: {{input.anomaly}}"
+      maxCalls: 2
+      maxPromptChars: 4000
+      schema:
+        type: object
+        required: [severity, summary]
+        properties:
+          severity: { type: string, enum: [low, medium, high] }
+          summary: { type: string, maxLength: 240 }
+  - id: alert
+    type: notify
+    retry: { maxAttempts: 5, backoffMs: 500, factor: 2 }
+    params:
+      message: "Anomaly {{outputs.classify.severity}}: {{outputs.classify.summary}}"
+edges:
+  - { from: classify, to: alert }
