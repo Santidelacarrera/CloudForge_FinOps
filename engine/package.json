@@ -14,5 +14,11 @@
     "bullmq": "^6.3.12",
     "ioredis": "^6.0.0",
     "pg": "^8.23.1"
+  },
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./pg-store": "./src/pg-store.js",
+    "./queue": "./src/queue.js"
   }
 }

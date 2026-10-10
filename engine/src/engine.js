@@ -37,6 +37,9 @@ export class Engine {
     return published;
   }
 
+  /** Deterministic execution id for a (workflow, eventId) pair: lets callers know the id before the job runs. */
+  executionId(workflowRef, eventId) { return `ex-${hash([workflowRef, eventId]).slice(0, 16)}`; }
+
   async getVersion(orgId, id) { return await this.store.get('workflowVersions', orgId, id); }
 
   // ---------- executions ----------
@@ -44,7 +47,7 @@ export class Engine {
   async start(orgId, workflowRef, input = {}, { eventId, actor = 'system' } = {}) {
     const wf = await this.getVersion(orgId, workflowRef);
     if (!wf) throw new PermanentError(`unknown workflow ${workflowRef}`);
-    const execId = eventId ? `ex-${hash([workflowRef, eventId]).slice(0, 16)}` : `ex-${randomUUID()}`;
+    const execId = eventId ? this.executionId(workflowRef, eventId) : `ex-${randomUUID()}`;
     if (await this.store.has('executions', orgId, execId)) return await this.store.get('executions', orgId, execId);
     const exec = {
       id: execId, orgId, workflow: workflowRef, status: 'RUNNING', input, startedBy: actor, createdAt: this.now(),
@@ -136,7 +139,7 @@ export class Engine {
       case 'simulate': {
         const sim = c.simulators?.[p.simulator];
         if (!sim) throw new PermanentError(`unknown simulator ${p.simulator}`);
-        const plan = await sim(exec.input, p);
+        const plan = await sim(exec.input, p, { orgId: exec.orgId, executionId: exec.id });
         // A plan is data only: dry-run never touches infrastructure.
         return { ...plan, dryRun: true, planHash: hash(plan) };
       }

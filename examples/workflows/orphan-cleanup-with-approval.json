@@ -1,0 +1,13 @@
+{
+  "id": "orphan-cleanup-with-approval",
+  "name": "Delete orphaned resource (dry-run plan, human approval, idempotent apply)",
+  "trigger": { "type": "recommendation.created", "filter": { "kind": "delete_orphan" } },
+  "nodes": [
+    { "id": "plan", "type": "simulate", "params": { "simulator": "recommendation" } },
+    { "id": "approve", "type": "approval", "params": { "planFrom": "plan", "requiredRole": "approver" } },
+    { "id": "apply", "type": "apply_plan", "credentialRef": "cred/remediation-scoped",
+      "retry": { "maxAttempts": 3, "backoffMs": 1000, "factor": 2 }, "params": { "planFrom": "plan" } },
+    { "id": "done", "type": "notify", "params": { "message": "Deleted {{input.recommendationId}} ({{outputs.plan.resource}})" } }
+  ],
+  "edges": [ { "from": "plan", "to": "approve" }, { "from": "approve", "to": "apply" }, { "from": "apply", "to": "done" } ]
+}
