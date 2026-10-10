@@ -24,63 +24,63 @@ export class Engine {
 
   // ---------- definitions ----------
   /** Validates and publishes an immutable, content-hashed workflow version. */
-  publish(orgId, def) {
+  async publish(orgId, def) {
     const errors = validateDefinition(def);
     if (errors.length) throw new PermanentError(`invalid workflow: ${errors.join('; ')}`);
     const order = chain(def);
     const version = def.version ?? 1;
     const id = `${def.id}@${version}`;
-    if (this.store.has('workflowVersions', orgId, id)) throw new PermanentError(`${id} already published (versions are immutable)`);
+    if (await this.store.has('workflowVersions', orgId, id)) throw new PermanentError(`${id} already published (versions are immutable)`);
     const published = deepFreeze({ ...structuredClone(def), version, order, contentHash: hash(def), publishedAt: this.now() });
-    this.store.put('workflowVersions', orgId, id, published);
-    this.audit(orgId, 'workflow.published', { id });
+    await this.store.put('workflowVersions', orgId, id, published);
+    await this.audit(orgId, 'workflow.published', { id });
     return published;
   }
 
-  getVersion(orgId, id) { return this.store.get('workflowVersions', orgId, id); }
+  async getVersion(orgId, id) { return await this.store.get('workflowVersions', orgId, id); }
 
   // ---------- executions ----------
   /** Start (or deduplicate) an execution. `eventId` makes the trigger idempotent. */
   async start(orgId, workflowRef, input = {}, { eventId, actor = 'system' } = {}) {
-    const wf = this.getVersion(orgId, workflowRef);
+    const wf = await this.getVersion(orgId, workflowRef);
     if (!wf) throw new PermanentError(`unknown workflow ${workflowRef}`);
     const execId = eventId ? `ex-${hash([workflowRef, eventId]).slice(0, 16)}` : `ex-${randomUUID()}`;
-    if (this.store.has('executions', orgId, execId)) return this.store.get('executions', orgId, execId);
+    if (await this.store.has('executions', orgId, execId)) return await this.store.get('executions', orgId, execId);
     const exec = {
       id: execId, orgId, workflow: workflowRef, status: 'RUNNING', input, startedBy: actor, createdAt: this.now(),
       steps: wf.order.map((n) => ({ nodeId: n, status: 'PENDING', attempts: 0, logs: [] })), outputs: {},
     };
-    this.save(exec);
-    this.audit(orgId, 'execution.started', { execId, workflowRef, actor });
+    await this.save(exec);
+    await this.audit(orgId, 'execution.started', { execId, workflowRef, actor });
     return this.resume(orgId, execId);
   }
 
-  get(orgId, execId) { return this.store.get('executions', orgId, execId); }
+  async get(orgId, execId) { return await this.store.get('executions', orgId, execId); }
 
   /** Drives the execution until it finishes or pauses. Safe to call repeatedly (e.g. after a worker restart). */
   async resume(orgId, execId) {
-    const exec = this.get(orgId, execId);
+    const exec = await this.get(orgId, execId);
     if (!exec) throw new PermanentError('unknown execution');
     if (['SUCCEEDED', 'FAILED', 'REJECTED'].includes(exec.status)) return exec;
-    const wf = this.getVersion(orgId, exec.workflow);
+    const wf = await this.getVersion(orgId, exec.workflow);
     exec.status = 'RUNNING';
     for (const step of exec.steps) {
       if (step.status === 'SUCCEEDED' || step.status === 'SKIPPED') continue;
       const node = wf.nodes.find((n) => n.id === step.nodeId);
       const outcome = await this.runStep(exec, step, node, wf);
-      this.save(exec);
-      if (outcome === 'PAUSED') { exec.status = 'WAITING_APPROVAL'; this.save(exec); return exec; }
+      await this.save(exec);
+      if (outcome === 'PAUSED') { exec.status = 'WAITING_APPROVAL'; await this.save(exec); return exec; }
       if (outcome === 'REJECTED' || outcome === 'FAILED') {
         exec.status = outcome;
         exec.steps.filter((s) => s.status === 'PENDING').forEach((s) => { s.status = 'SKIPPED'; });
-        this.save(exec);
-        this.audit(orgId, `execution.${outcome.toLowerCase()}`, { execId });
+        await this.save(exec);
+        await this.audit(orgId, `execution.${outcome.toLowerCase()}`, { execId });
         return exec;
       }
     }
     exec.status = 'SUCCEEDED';
-    this.save(exec);
-    this.audit(orgId, 'execution.succeeded', { execId });
+    await this.save(exec);
+    await this.audit(orgId, 'execution.succeeded', { execId });
     return exec;
   }
 
@@ -88,32 +88,32 @@ export class Engine {
     const orgId = exec.orgId;
     const log = (m) => step.logs.push(redact(String(m), this.secrets(node)));
 
-    if (node.type === 'approval') return this.approvalStep(exec, step, node, log);
+    if (node.type === 'approval') return await this.approvalStep(exec, step, node, log);
 
     const retry = { maxAttempts: 3, backoffMs: 1000, factor: 2, ...(node.retry ?? {}) };
     step.status = 'RUNNING';
     for (;;) {
       step.attempts += 1;
       try {
-        if (DESTRUCTIVE.has(node.type)) this.assertApproved(exec, node);
+        if (DESTRUCTIVE.has(node.type)) await this.assertApproved(exec, node);
         const key = `${exec.id}:${node.id}`;
-        const prior = this.store.get('effects', orgId, key);
+        const prior = await this.store.get('effects', orgId, key);
         const result = prior !== undefined ? prior.result : await this.withTimeout(
           this.execute(exec, node, { idempotencyKey: key, log }), node.timeoutMs ?? 30000);
-        if (prior === undefined) this.store.put('effects', orgId, key, { result });
+        if (prior === undefined) await this.store.put('effects', orgId, key, { result });
         exec.outputs[node.id] = result;
         step.status = 'SUCCEEDED';
-        this.audit(orgId, 'step.succeeded', { execId: exec.id, node: node.id, attempts: step.attempts });
+        await this.audit(orgId, 'step.succeeded', { execId: exec.id, node: node.id, attempts: step.attempts });
         return 'OK';
       } catch (err) {
         log(`attempt ${step.attempts} failed: ${err.message}`);
         step.error = redact(err.message, this.secrets(node));
         if (err instanceof PermanentError || step.attempts >= retry.maxAttempts) {
           step.status = 'FAILED';
-          this.audit(orgId, 'step.failed', { execId: exec.id, node: node.id, attempts: step.attempts, error: step.error });
+          await this.audit(orgId, 'step.failed', { execId: exec.id, node: node.id, attempts: step.attempts, error: step.error });
           return 'FAILED';
         }
-        this.save(exec); // persist attempt count before waiting: recoverable after a crash
+        await this.save(exec); // persist attempt count before waiting: recoverable after a crash
         await this.sleep(retry.backoffMs * retry.factor ** (step.attempts - 1));
       }
     }
@@ -174,9 +174,9 @@ export class Engine {
   }
 
   // ---------- approvals ----------
-  approvalStep(exec, step, node, log) {
+  async approvalStep(exec, step, node, log) {
     const orgId = exec.orgId;
-    const existing = this.store.list('approvals', orgId).find((a) => a.executionId === exec.id && a.nodeId === node.id);
+    const existing = (await this.store.list('approvals', orgId)).find((a) => a.executionId === exec.id && a.nodeId === node.id);
     if (!existing) {
       const plan = exec.outputs[node.params.planFrom];
       if (!plan?.planHash) throw new SafetyError('approval requires a simulated plan');
@@ -185,9 +185,9 @@ export class Engine {
         requiredRole: node.params.requiredRole ?? 'approver', allowSelfApproval: node.params.allowSelfApproval ?? false,
         requestedBy: exec.startedBy, requestedAt: this.now(),
       };
-      this.store.put('approvals', orgId, a.id, a);
+      await this.store.put('approvals', orgId, a.id, a);
       step.status = 'WAITING_APPROVAL';
-      this.audit(orgId, 'approval.requested', { approvalId: a.id, execId: exec.id, planHash: a.planHash });
+      await this.audit(orgId, 'approval.requested', { approvalId: a.id, execId: exec.id, planHash: a.planHash });
       log(`waiting for approval ${a.id}`);
       return 'PAUSED';
     }
@@ -199,8 +199,8 @@ export class Engine {
   }
 
   /** Records the human decision. Roles, tenant and separation of duties are enforced here. */
-  async decide(orgId, approvalId, user, decision, comment = '') {
-    const a = this.store.get('approvals', orgId, approvalId);
+  async decide(orgId, approvalId, user, decision, comment = '', { defer = false } = {}) {
+    const a = await this.store.get('approvals', orgId, approvalId);
     if (!a) throw new PermanentError('unknown approval'); // also hit for other tenants' ids
     if (a.status !== 'pending') throw new PermanentError(`approval already ${a.status}`);
     if (user.orgId !== orgId) throw new SafetyError('user belongs to a different organization');
@@ -208,26 +208,26 @@ export class Engine {
     if (!a.allowSelfApproval && user.id === a.requestedBy) throw new SafetyError('requester cannot approve their own plan');
     if (!['approved', 'rejected'].includes(decision)) throw new PermanentError('decision must be approved|rejected');
     Object.assign(a, { status: decision, decidedBy: user.id, decidedAt: this.now(), comment });
-    this.store.put('approvals', orgId, a.id, a);
-    this.audit(orgId, `approval.${decision}`, { approvalId, by: user.id, planHash: a.planHash });
-    return this.resume(orgId, a.executionId);
+    await this.store.put('approvals', orgId, a.id, a);
+    await this.audit(orgId, `approval.${decision}`, { approvalId, by: user.id, planHash: a.planHash });
+    return defer ? a : this.resume(orgId, a.executionId);
   }
 
   /** Last line of defence: a destructive node only runs with an approved decision bound to the exact plan hash. */
-  assertApproved(exec, node) {
+  async assertApproved(exec, node) {
     const plan = exec.outputs[node.params.planFrom];
-    const ok = this.store.list('approvals', exec.orgId).find((a) =>
+    const ok = (await this.store.list('approvals', exec.orgId)).find((a) =>
       a.executionId === exec.id && a.status === 'approved' && a.planHash === plan?.planHash);
     if (!ok) throw new SafetyError('destructive step without an approved decision for this exact plan');
   }
 
   // ---------- plumbing ----------
-  save(exec) { this.store.put('executions', exec.orgId, exec.id, exec); }
-  audit(orgId, action, detail) {
+  async save(exec) { await this.store.put('executions', exec.orgId, exec.id, exec); }
+  async audit(orgId, action, detail) {
     const id = `${this.now()}-${randomUUID().slice(0, 8)}`;
-    this.store.put('audit', orgId, id, { id, orgId, action, detail: redact(detail), at: this.now() });
+    await this.store.put('audit', orgId, id, { id, orgId, action, detail: redact(detail), at: this.now() });
   }
-  auditLog(orgId) { return this.store.list('audit', orgId); }
+  async auditLog(orgId) { return this.store.list('audit', orgId); }
 }
 
 function render(tpl, exec) {

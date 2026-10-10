@@ -4,6 +4,15 @@
   "private": true,
   "type": "module",
   "description": "CloudForge FinOps workflow engine: durable steps, retries, idempotency, human approval gate",
-  "scripts": { "test": "node --test \"test/*.test.js\"" },
-  "engines": { "node": ">=20" }
+  "scripts": {
+    "test": "node --test \"test/*.test.js\""
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "bullmq": "^6.3.12",
+    "ioredis": "^6.0.0",
+    "pg": "^8.23.1"
+  }
 }
