@@ -17,6 +17,7 @@ Each control below names the code that enforces it and the test that proves it.
 | Audit entries are append-only: a DB trigger rejects UPDATE/DELETE | `db/schema.sql` (`forbid_audit_change`) | `postgres: ... immutable audit` |
 | Concurrent decisions on one approval: exactly one wins (atomic check-and-set; `SELECT ... FOR UPDATE` in Postgres) | `Store.update`, `Engine.decide` | `postgres: concurrent approvals — exactly one decision wins` |
 | Provider access split by credential: sync uses a read-only token; the apply step uses a separate scoped write token that the provider itself limits (only the approval tag; delete only if tagged and unattached; idempotent) | `provider.ts`, `providers/localcloud/server.mjs` | `localcloud.test.mjs`, `sync uses only the read-only token; remediation really deletes the approved orphan, once` |
+| Cloudflare adapter: separate read and write tokens (write token must differ from the read token), emptiness re-checked immediately before deleting (TOCTOU guard), 404 on delete treated as already-absent | `api/src/cloudflare.ts` | `adapter: pagination, transient vs permanent errors...`, `platform: only the empty namespace is recommended...` |
 | The remediation credential never appears in execution state or audit | `redact`, `Engine.secrets` | same e2e test (`credential never appears in execution state`) |
 | Decisions cannot be replayed; approver role, tenant and separation of duties are enforced by the engine behind the REST endpoint | `Engine.decide`, `EngineErrorFilter` (403/404/400) | `workflow pauses for approval; only an authorised other user can approve...` |
 | Secrets live outside workflow definitions (`credentialRef`), resolved at run time, masked in step logs, errors and audit | `redact`, `Engine.secrets` | `secrets are masked in logs and audit` |
@@ -30,7 +31,7 @@ Each control below names the code that enforces it and the test that proves it.
 
 ## Known limits (be honest)
 
-* The only provider implemented is LocalCloud (a local stand-in). A commercial provider needs its own adapter honouring the same contract; the webhook DNS check runs before the request, and a production HTTP client must pin the resolved IP to avoid DNS-rebinding.
+* LocalCloud is a local stand-in, and the Cloudflare adapter has only been exercised against a mock (no live access from the authoring environment); run `scripts/cloudflare-smoke.mjs` before trusting it. Cloudflare API tokens cannot be conditioned on a tag, so there is no provider-side approval guard there. A commercial provider needs its own adapter honouring the same contract; the webhook DNS check runs before the request, and a production HTTP client must pin the resolved IP to avoid DNS-rebinding.
 * Organisation rows are created lazily from the token issuer's claims; user/membership management and the JWT issuer are out of scope (tokens are minted with `npm run token`).
 * Idempotency of the external side effect relies on the connector honouring `idempotencyKey`. A crash between the cloud call and persisting the step result can re-invoke the connector with the same key.
 * The dev `docker-compose.yml` uses hard-coded database passwords; the images could not be built in the authoring environment (no Docker daemon).

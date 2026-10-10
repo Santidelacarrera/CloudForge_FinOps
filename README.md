@@ -37,6 +37,7 @@ flowchart LR
 | Motor de ejecución | Node.js + BullMQ + Redis; estado en PostgreSQL | `engine/` |
 | Analítica | Python + FastAPI (sin estado) sobre un núcleo Python sin dependencias | `analytics/` |
 | Almacenamiento | PostgreSQL 16 con RLS por organización | `db/schema.sql` |
+| Proveedores | Cloudflare (Workers KV, adaptador) y LocalCloud (desarrollo); contrato común `CloudProvider` | `api/src/cloudflare.ts`, `api/src/provider.ts` |
 | Proveedor cloud de desarrollo | LocalCloud: API HTTP gratuita y local con facturación, recursos, token de solo lectura y token de escritura acotado | `providers/localcloud/` |
 | Infraestructura | Docker Compose (dev). Ejemplo opcional de roles de mínimo privilegio para AWS en Terraform (no se usa) | `docker-compose.yml`, `infra/examples/aws-terraform/` |
 
@@ -70,9 +71,23 @@ El estado se persiste tras cada paso, así que `resume()` tras un reinicio conti
 * **Proveedor cloud + conector** (`providers/localcloud/`, `api/src/provider.ts`): LocalCloud es una API gratuita que corre en local y aplica los controles de un proveedor real: token de **solo lectura** para facturación/recursos y un token de **escritura acotado** que solo puede etiquetar `cloudforge:approved-for-deletion` y borrar recursos con esa etiqueta y sin adjuntar, con `Idempotency-Key`. `POST /api/v1/connectors/sync` importa su facturación con el token de lectura; `apply_plan` borra de verdad el recurso con el token de escritura (referenciado por `credentialRef`, nunca visible en estado ni auditoría). Probado de extremo a extremo: no hay ninguna llamada de escritura antes de la aprobación, se borra solo el recurso aprobado y una segunda ejecución falla sin reintentos.
 * **Dataset sintético** (`datasets/`) con anomalías controladas (`ground_truth.json`) y ejemplos de flujos en `examples/workflows/` (JSON y YAML).
 
+## Cloudflare (plan gratuito)
+
+Adaptador `CloudflareProvider` para **Workers KV**: detecta namespaces **sin ninguna clave** (recomendación de borrado con evidencia), genera el plan dry-run, espera la aprobación humana y solo entonces borra con un token de escritura distinto.
+
+1. Crea **dos API tokens** en Cloudflare, ambos limitados a tu cuenta: uno con `Workers KV Storage: Read` y otro con `Workers KV Storage: Edit`.
+2. Variables: `PROVIDER_KIND=cloudflare`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_READ_TOKEN`, `CRED_CRED_REMEDIATION_SCOPED=<token Edit>`.
+3. **Valida primero en solo lectura** (solo hace GET): `CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_READ_TOKEN=... node scripts/cloudflare-smoke.mjs`.
+
+Qué es real y qué no:
+* **No verificado contra la API real de Cloudflare**: desde el entorno de desarrollo no hay acceso a `api.cloudflare.com` ni a su documentación. El adaptador sigue el formato de la API que conozco y se probó contra un mock (`providers/cloudflare-mock/`, no es Cloudflare). El script de humo existe precisamente para comprobarlo.
+* El plan gratuito **no tiene facturación**: el ahorro es 0 USD (higiene de inventario) salvo que fijes `CLOUDFLARE_KV_EST_USD_PER_DAY` (estimación explícita por namespace y día); `connectors/sync` importa esas filas estimadas.
+* Los tokens de Cloudflare no admiten condiciones por etiqueta, así que no existe la guarda del proveedor de LocalCloud; el adaptador **vuelve a comprobar que el namespace sigue vacío justo antes de borrar** y la aprobación humana es el control principal.
+* Solo Workers KV; Workers, R2, D1 y DNS no están implementados.
+
 ## Limitaciones
 
-* **Ningún proveedor comercial.** El conector funciona de verdad pero contra LocalCloud; no puedo crear cuentas ni credenciales en un proveedor real. Para uno real hay que escribir un adaptador que cumpla el mismo contrato (`HttpProvider`: facturación por lectura, borrado con etiqueta de aprobación e idempotencia). Sin `PROVIDER_URL`, `apply_plan` corre en modo *demo* (registra y no llama a nada).
+* **Ningún proveedor real probado en vivo.** LocalCloud funciona de verdad pero es local; el adaptador de Cloudflare solo se probó contra un mock (ver sección Cloudflare). Sin `PROVIDER_URL`/`PROVIDER_KIND`, `apply_plan` corre en modo *demo* (registra y no llama a nada).
 * Los flujos son cadenas lineales (sin ramas). Solo hay disparador por anomalía (no por presupuesto).
 * El nodo `ai_classify` falla cerrado si no hay conector LLM configurado; el API no incluye ninguno.
 * Las anomalías y pronósticos se calculan bajo demanda; no se persisten como entidades.
@@ -104,7 +119,7 @@ export JWT_SECRET=... DATABASE_URL=postgres://cloudforge_app:cloudforge_app@loca
 export CLOUDFORGE_PG_URL=postgres://cloudforge_app:cloudforge_app@localhost:5432/cloudforge REDIS_URL=redis://localhost:6379
 python3 -I -m unittest discover -s analytics/tests -v   # 16 tests (núcleo y FastAPI)
 (cd engine && npm test)                                 # 20 tests (incluye PostgreSQL/BullMQ reales)
-(cd api && npm test)                                    # 8 tests e2e: API + Postgres + Redis + FastAPI reales
+(cd api && npm test)                                    # 11 tests e2e: API + Postgres + Redis + FastAPI reales
 node --test providers/localcloud/localcloud.test.mjs   # 3 tests del proveedor local
 ```
 Sin `CLOUDFORGE_PG_URL`/`REDIS_URL` los tests de integración se omiten.

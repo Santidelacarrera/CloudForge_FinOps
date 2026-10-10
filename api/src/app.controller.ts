@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { AuthUser, Roles } from './auth';
 import { CoreService } from './core.service';
 import { buildDeletePlan } from './plans';
-import { dailySeries, listRecommendations, summary } from './finance';
+import { dailySeries, summary } from './finance';
 
 const { PermanentError, SafetyError, hash } = require('@cloudforge/engine');
 
@@ -152,12 +152,12 @@ export class AppController {
 
   // ---------- recommendations & simulation ----------
   @Get('recommendations')
-  recommendations(@Req() req: Req_) { return listRecommendations(this.core.store, req.user.orgId); }
+  recommendations(@Req() req: Req_) { return this.core.recommendations(req.user.orgId); }
 
   /** Dry-run: produces and stores a plan. Has no connector to any cloud API. */
   @Post('recommendations/:id/simulate') @Roles('analyst', 'operator') @HttpCode(200)
   async simulate(@Req() req: Req_, @Param('id') id: string) {
-    const rec = (await listRecommendations(this.core.store, req.user.orgId)).find((r) => r.id === id);
+    const rec = (await this.core.recommendations(req.user.orgId)).find((r) => r.id === id);
     if (!rec) throw new NotFoundException('unknown recommendation');
     const base = buildDeletePlan(rec);
     const planHash = hash(base); // same hashing as the engine's simulate node

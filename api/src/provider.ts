@@ -1,9 +1,20 @@
+import type { Recommendation } from './plans';
 const { PermanentError } = require('@cloudforge/engine');
 
 export const APPROVAL_TAG = 'cloudforge:approved-for-deletion';
 
-/** Generic HTTP cloud provider connector (works with LocalCloud; the contract is what a real provider adapter must meet). */
-export class HttpProvider {
+/** What the platform needs from a cloud: read billing/inventory with a read-only credential, delete with a scoped one. */
+export interface CloudProvider {
+  /** READ-ONLY. Standard CSV (see datasets/sample_billing.csv). */
+  billingCsv(from?: string, to?: string): Promise<string>;
+  /** WRITE. Only reachable from an approved apply_plan step. Must honour idempotencyKey (or be naturally idempotent). */
+  deleteResource(resourceId: string, credential: string | undefined, idempotencyKey: string): Promise<any>;
+  /** Optional READ-ONLY inventory-based recommendations (for providers without per-resource billing). */
+  recommendations?(orgId: string): Promise<Recommendation[]>;
+}
+
+/** Generic HTTP provider (LocalCloud contract). */
+export class HttpProvider implements CloudProvider {
   constructor(private baseUrl: string, private readToken: string) {}
 
   private async req(method: string, path: string, token: string, body?: unknown, idemKey?: string) {
@@ -18,7 +29,6 @@ export class HttpProvider {
     return json;
   }
 
-  /** READ-ONLY: pulls billing line items and returns the platform's standard CSV. */
   async billingCsv(from?: string, to?: string): Promise<string> {
     const q = new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) });
     const { items } = await this.req('GET', `/v1/billing/daily?${q}`, this.readToken);
@@ -28,7 +38,6 @@ export class HttpProvider {
     return ['date,account_id,project,service,region,environment,resource_id,cost,currency,tags', ...rows].join('\n') + '\n';
   }
 
-  /** WRITE: only reachable from an approved apply_plan step, with the scoped remediation credential. */
   async deleteResource(resourceId: string, credential: string | undefined, idempotencyKey: string) {
     if (!credential) throw new PermanentError('remediation credential is not configured');
     const id = encodeURIComponent(resourceId);
