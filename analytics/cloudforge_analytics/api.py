@@ -10,7 +10,7 @@ from decimal import Decimal
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from . import anomaly, forecast, ingest
+from . import anomaly, budget, forecast, ingest, variance
 
 MAX_CSV_BYTES = 20 * 1024 * 1024
 app = FastAPI(title="CloudForge Analytics", version="0.1.0")
@@ -50,7 +50,7 @@ def ingest_csv(req: IngestRequest):
     try:
         res = ingest.import_csv(path, req.rates, req.base_currency)
     except ValueError as e:
-        raise HTTPException(422, str(e))
+        raise HTTPException(422, str(e)) from e
     finally:
         os.unlink(path)
     return {
@@ -77,4 +77,33 @@ def forecast_endpoint(req: ForecastRequest):
         return forecast.forecast_month_end({d: Decimal(str(v)) for d, v in req.series.items()},
                                            req.as_of, window=req.window, budget=req.budget)
     except ValueError as e:
-        raise HTTPException(422, str(e))
+        raise HTTPException(422, str(e)) from e
+
+
+class BudgetStatusRequest(BaseModel):
+    series: dict[date, float]            # daily series already restricted to the budget's scope
+    amount: float = Field(gt=0)
+    as_of: date
+    window: int = Field(14, ge=3, le=90)
+    thresholds: list[float] = Field(default_factory=lambda: list(budget.DEFAULT_THRESHOLDS), max_length=10)
+
+
+@app.post("/v1/budget-status")
+def budget_status(req: BudgetStatusRequest):
+    if any(t <= 0 or t > 10 for t in req.thresholds):
+        raise HTTPException(422, "thresholds must be in (0, 10]")
+    try:
+        return budget.evaluate({d: Decimal(str(v)) for d, v in req.series.items()}, req.amount, req.as_of,
+                               window=req.window, thresholds=tuple(req.thresholds))
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+class VarianceRequest(BaseModel):
+    series: dict[str, dict[date, float]]
+    as_of: date
+
+
+@app.post("/v1/variance")
+def variance_endpoint(req: VarianceRequest):
+    return variance.mom_variance(req.series, req.as_of)

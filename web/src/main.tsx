@@ -5,9 +5,10 @@ import { Dashboard } from './Dashboard';
 import { Recommendations } from './Recommendations';
 import { Workflows } from './Workflows';
 import { Approvals } from './Approvals';
+import { CostModel } from './CostModel';
 import './styles.css';
 
-const TABS = { dashboard: 'Panel financiero', recs: 'Recomendaciones', workflows: 'Flujos', approvals: 'Aprobaciones' } as const;
+const TABS = { dashboard: 'Panel financiero', costmodel: 'Presupuestos y asignación', recs: 'Recomendaciones', workflows: 'Flujos', approvals: 'Aprobaciones' } as const;
 type Tab = keyof typeof TABS;
 
 function App() {
@@ -29,6 +30,7 @@ function App() {
       <main>
         {!token ? <div className="card">Pega un token JWT (<code>npm run token -- usuario org rol1,rol2</code> en <code>api/</code>) para empezar.</div>
           : tab === 'dashboard' ? <Dashboard key={token} />
+          : tab === 'costmodel' ? <CostModel key={token} />
           : tab === 'recs' ? <Recommendations key={token} />
           : tab === 'workflows' ? <Workflows key={token} />
           : <Approvals key={token} />}
