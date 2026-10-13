@@ -42,6 +42,20 @@ class Api(unittest.TestCase):
         r = client.post("/v1/forecast", json={"series": {"2026-09-01": 10}, "as_of": "2026-09-01", "budget": -5})
         self.assertEqual(r.status_code, 422)
 
+    def test_budget_status_and_validation(self):
+        series = {f"2026-09-{d:02d}": 80.0 for d in range(1, 16)}
+        r = client.post("/v1/budget-status", json={"series": series, "amount": 2000, "as_of": "2026-09-15"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["status"], "at_risk")
+        for bad in ({"amount": 0}, {"amount": -1}, {"thresholds": [0]}, {"thresholds": [11]}):
+            body = {"series": series, "amount": 2000, "as_of": "2026-09-15", **bad}
+            self.assertEqual(client.post("/v1/budget-status", json=body).status_code, 422, bad)
+
+    def test_variance_endpoint(self):
+        body = {"series": {"x": {"2026-08-01": 1.0, "2026-09-01": 3.0}}, "as_of": "2026-09-10"}
+        r = client.post("/v1/variance", json=body)
+        self.assertEqual(r.json()["rows"][0]["delta"], 2.0)
+
 
 if __name__ == "__main__":
     unittest.main()

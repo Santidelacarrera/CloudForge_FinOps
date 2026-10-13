@@ -22,6 +22,22 @@ CREATE INDEX IF NOT EXISTS cost_records_date ON cost_records (org_id, usage_date
 CREATE TABLE IF NOT EXISTS budgets (
   org_id text NOT NULL, id text NOT NULL, name text NOT NULL, month text NOT NULL, amount numeric(18,2) NOT NULL,
   PRIMARY KEY (org_id, id));
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS scope_type text NOT NULL DEFAULT 'total' CHECK (scope_type IN ('total','project','service','environment'));
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS scope_value text NOT NULL DEFAULT '';
+ALTER TABLE budgets ADD COLUMN IF NOT EXISTS thresholds numeric[] NOT NULL DEFAULT '{0.5,0.8,1.0}';
+-- Detected anomalies are entities: stable id, lifecycle (open -> acknowledged), method and explanation kept with them.
+CREATE TABLE IF NOT EXISTS anomalies (
+  org_id text NOT NULL, id text NOT NULL, series_key text NOT NULL, series text NOT NULL, usage_date date NOT NULL,
+  observed numeric(18,4) NOT NULL, expected numeric(18,4) NOT NULL, delta numeric(18,4) NOT NULL, robust_z numeric NOT NULL,
+  direction text NOT NULL, explanation text NOT NULL, method jsonb NOT NULL,
+  status text NOT NULL DEFAULT 'open' CHECK (status IN ('open','acknowledged')),
+  detected_at timestamptz NOT NULL DEFAULT now(), acknowledged_by text, PRIMARY KEY (org_id, id));
+CREATE INDEX IF NOT EXISTS anomalies_date ON anomalies (org_id, usage_date);
+-- Every forecast shown to a user is stored with its method, interval and assumptions (auditable, never a bare number).
+CREATE TABLE IF NOT EXISTS forecast_snapshots (
+  org_id text NOT NULL, id text NOT NULL, as_of date NOT NULL, month text NOT NULL, point numeric(18,2) NOT NULL,
+  interval_80 jsonb NOT NULL, interval_95 jsonb NOT NULL, method jsonb NOT NULL, assumptions jsonb NOT NULL,
+  budget numeric(18,2), created_by text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (org_id, id));
 -- Engine documents: workflow versions, executions, approvals, effects (idempotency ledger), audit entries.
 CREATE TABLE IF NOT EXISTS engine_documents (
   seq bigserial, org_id text NOT NULL, kind text NOT NULL, id text NOT NULL, doc jsonb NOT NULL,
@@ -43,7 +59,7 @@ GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO cloudforge_app;
 
 -- Row-level security: a session sees only the org set in app.org_id.
 DO $$ DECLARE t text; BEGIN
-  FOREACH t IN ARRAY ARRAY['cloud_accounts','cost_imports','cost_records','budgets','engine_documents'] LOOP
+  FOREACH t IN ARRAY ARRAY['cloud_accounts','cost_imports','cost_records','budgets','anomalies','forecast_snapshots','engine_documents'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     EXECUTE format('DROP POLICY IF EXISTS org_isolation ON %I', t);
     EXECUTE format('CREATE POLICY org_isolation ON %I USING (org_id = current_setting(''app.org_id'', true)) WITH CHECK (org_id = current_setting(''app.org_id'', true))', t);

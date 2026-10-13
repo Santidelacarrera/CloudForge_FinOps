@@ -17,6 +17,7 @@ const shot = async (role, tab, name, act) => {
   await ctx.close();
 };
 await shot(token('ana', ['analyst']), 'Panel financiero', 'dashboard', async (p) => { await p.getByLabel('Fecha de corte del pronóstico').fill('2026-09-15'); await p.waitForTimeout(800); });
+await shot(token('ana', ['analyst']), 'Presupuestos y asignación', 'costmodel', async (p) => { await p.getByLabel('Fecha de corte', { exact: true }).fill('2026-09-15'); await p.waitForTimeout(1200); });
 await shot(token('ana', ['analyst', 'operator']), 'Recomendaciones', 'recommendations', async (p) => { await p.getByRole('button', { name: /Simular/ }).click(); await p.waitForSelector('pre'); });
 await shot(token('dev', ['operator']), 'Flujos', 'workflows');
 await shot(token('fin', ['approver']), 'Aprobaciones', 'approvals', async (p) => { await p.getByRole('button', { name: 'Ver pasos' }).first().click(); await p.waitForSelector('[aria-label="Historial de pasos"]'); });

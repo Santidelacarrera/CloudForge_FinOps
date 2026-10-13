@@ -1,0 +1,9 @@
+line-length = 120
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "W", "B", "UP", "S"]
+
+[lint.per-file-ignores]
+"analytics/tests/*" = ["E402", "S101"]   # tests extend sys.path before importing the package; asserts are intended
+"datasets/*" = ["S311"]                  # random is used for synthetic data, not for security

@@ -24,7 +24,9 @@ if (process.argv[1].endsWith('seed-demo.mjs')) {
   const truth = JSON.parse(readFileSync('datasets/ground_truth.json', 'utf8'));
   const ana = token('ana', ['analyst']); const dev = token('dev', ['operator']);
   console.log(await call('POST', '/api/v1/cost-imports', ana, { name: 'sample_billing.csv', csv: readFileSync('datasets/sample_billing.csv', 'utf8'), rates: truth.fx_rates }).then((r) => ({ inserted: r.inserted, rejected: r.rejected.length })));
-  await call('PUT', '/api/v1/budgets/2026-09', ana, { amount: 9000 });
+  for (const b of JSON.parse(readFileSync('datasets/budgets.json', 'utf8')).budgets) {
+    await call('PUT', `/api/v1/budgets/${b.month}`, ana, { amount: b.amount, scope_type: b.scope_type, scope_value: b.scope_value });
+  }
   console.log(await call('POST', '/api/v1/workflows', dev, JSON.parse(readFileSync('examples/workflows/orphan-cleanup-with-approval.json', 'utf8'))));
   const recs = await call('GET', '/api/v1/recommendations', ana);
   console.log(await call('POST', '/api/v1/workflows/orphan-cleanup-with-approval/run', dev, { input: { recommendationId: recs[0].id } }, { 'idempotency-key': 'demo-1' }));
