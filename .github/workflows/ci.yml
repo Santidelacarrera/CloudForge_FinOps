@@ -22,7 +22,9 @@ jobs:
         with: { python-version: '3.12' }
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
-      - run: pip install -r analytics/requirements.txt
+      - run: pip install -r analytics/requirements.txt ruff bandit
+      - run: ruff check analytics datasets
+      - run: bandit -q -r analytics/cloudforge_analytics datasets
       - run: python3 datasets/generate_dataset.py && git diff --exit-code datasets
       - run: python3 -I -m unittest discover -s analytics/tests -v
       - run: PGPASSWORD=postgres psql -h localhost -U postgres -d cloudforge -v ON_ERROR_STOP=1 -f db/schema.sql
@@ -30,3 +32,4 @@ jobs:
       - run: cd engine && npm install && npm test
       - run: cd api && npm install && npx tsc --noEmit && npm test
       - run: cd web && npm install && npm run build
+      - run: for d in engine api web; do (cd $d && npm install --silent && npm audit --audit-level=high); done

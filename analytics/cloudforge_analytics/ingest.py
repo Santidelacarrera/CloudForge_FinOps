@@ -10,7 +10,7 @@ import hashlib
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from typing import Iterable
+from collections.abc import Iterable
 
 REQUIRED_COLUMNS = ("date", "account_id", "service", "cost", "currency")
 REQUIRED_TAGS = ("owner",)

@@ -11,6 +11,7 @@ from pathlib import Path
 
 OUT = Path(__file__).parent
 START, DAYS = date(2026, 8, 1), 61  # Aug 1 .. Sep 30
+# Synthetic data only: a deterministic PRNG is intended here.
 random.seed(42)
 
 SERVICES = {  # service: (base daily USD, project, env, region)
@@ -29,12 +30,21 @@ INJECTED = [
 EUR_SERVICE = "ObjectStorage"  # billed in EUR (rate 1.10 USD/EUR)
 
 
+BUDGETS = [  # simulated budgets for 2026-09 (all values synthetic)
+    {"scope_type": "total", "scope_value": "", "month": "2026-09", "amount": 9000},
+    {"scope_type": "service", "scope_value": "Compute", "month": "2026-09", "amount": 3500},
+    {"scope_type": "service", "scope_value": "Database", "month": "2026-09", "amount": 2000},
+    {"scope_type": "service", "scope_value": "ObjectStorage", "month": "2026-09", "amount": 1500},
+    {"scope_type": "service", "scope_value": "Functions", "month": "2026-09", "amount": 600},
+]
+
+
 def main():
     rows = []
     for i in range(DAYS):
         d = START + timedelta(days=i)
         for svc, (base, proj, env, region) in SERVICES.items():
-            cost = base * random.uniform(0.92, 1.08)
+            cost = base * random.uniform(0.92, 1.08)  # nosec B311
             for inj in INJECTED:
                 if inj["series"] == svc and inj["date"] == d.isoformat():
                     cost = base * inj["factor"]
@@ -49,7 +59,8 @@ def main():
                      "vol-0orphan01", "4.80", "USD", ""])
     rows.append(rows[40][:])  # exact duplicate
     rows.append(["2026-09-05", "111111111111", "x", "Compute", "region-a", "prod", "i-x", "abc", "USD", ""])  # bad cost
-    rows.append(["2026-09-05", "111111111111", "x", "Compute", "region-a", "prod", "i-y", "9.00", "JPY", ""])  # unknown cur
+    # unknown currency
+    rows.append(["2026-09-05", "111111111111", "x", "Compute", "region-a", "prod", "i-y", "9.00", "JPY", ""])
     with open(OUT / "sample_billing.csv", "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["date", "account_id", "project", "service", "region", "environment",
@@ -58,6 +69,7 @@ def main():
     (OUT / "ground_truth.json").write_text(json.dumps({
         "injected_anomalies": INJECTED, "expected_duplicates": 1, "expected_rejected": 2,
         "fx_rates": {"EUR": 1.10, "USD": 1.0}, "orphan_resource": "vol-0orphan01"}, indent=2) + "\n")
+    (OUT / "budgets.json").write_text(json.dumps({"budgets": BUDGETS, "note": "synthetic data"}, indent=2) + "\n")
     print(f"wrote {len(rows)} rows")
 
 
