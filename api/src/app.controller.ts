@@ -6,7 +6,10 @@ import { randomUUID } from 'node:crypto';
 import { AuthUser, Roles } from './auth';
 import { CoreService } from './core.service';
 import { buildDeletePlan } from './plans';
-import { dailySeries, summary } from './finance';
+import {
+  SCOPE_TYPES, acknowledgeAnomaly, allocation, budgetId, dailySeries, listAnomalies, listBudgets, listForecasts,
+  persistAnomalies, saveForecast, scopedSeries, summary, upsertBudget,
+} from './finance';
 
 const { PermanentError, SafetyError, hash } = require('@cloudforge/engine');
 
@@ -50,25 +53,71 @@ export class AppController {
     return json;
   }
 
+  /** Detects anomalies, persists them as entities and returns the stored rows (status preserved across re-detection). */
+  private async detectAnomalies(orgId: string, key = 'service', status?: string) {
+    const series = await dailySeries(this.core.store, orgId, key);
+    await persistAnomalies(this.core.store, orgId, key, await this.analytics('/v1/anomalies', { series }));
+    return listAnomalies(this.core.store, orgId, key, status);
+  }
+
+  /** Status of every budget of a month: month-to-date, explainable projection and crossed thresholds. */
+  private async budgetStatuses(orgId: string, month?: string, asOf?: string) {
+    const out: any[] = [];
+    for (const b of await listBudgets(this.core.store, orgId, month)) {
+      const series = await scopedSeries(this.core.store, orgId, b.scope_type, b.scope_value);
+      const inMonth = Object.keys(series).filter((d) => d.startsWith(b.month)).sort();
+      if (!inMonth.length) { out.push({ ...b, status: 'no_data' }); continue; }
+      const as_of = asOf && asOf.startsWith(b.month) ? asOf : inMonth[inMonth.length - 1];
+      try {
+        const r = await this.analytics('/v1/budget-status', { series, amount: b.amount, as_of, thresholds: b.thresholds });
+        out.push({ ...b, ...r });
+      } catch (e) {
+        if (!(e instanceof BadRequestException)) throw e;
+        out.push({ ...b, status: 'insufficient_data', as_of });
+      }
+    }
+    return out;
+  }
+
   /**
-   * Starts every workflow whose trigger is `anomaly.detected` and matches a detected anomaly.
-   * eventId = (series, date): re-importing the same data never starts a second execution.
+   * Starts workflows whose trigger matches.
+   *  - `anomaly.detected` (filter: series, minDelta, direction): eventId = anomaly:<series>:<date>
+   *  - `budget.threshold` (filter: scope_type, scope_value, minThreshold, default 0.8): eventId = budget:<budget id>:<threshold>
+   * Event ids are deterministic, so re-importing or re-evaluating never starts a second execution.
    */
   private async evaluateTriggers(orgId: string, actor: string) {
-    const series = await dailySeries(this.core.store, orgId, 'service');
-    const anomalies: any[] = await this.analytics('/v1/anomalies', { series });
     const latest = new Map<string, any>();
     for (const w of await this.core.store.list('workflowVersions', orgId)) {
       if (!latest.has(w.id) || latest.get(w.id).version < w.version) latest.set(w.id, w);
     }
-    const started: { executionId: string; workflow: string; anomaly: string }[] = [];
-    for (const w of latest.values()) {
-      if (w.trigger?.type !== 'anomaly.detected') continue;
-      for (const a of anomalies.filter((x) => matches(w.trigger.filter, x))) {
-        const ref = `${w.id}@${w.version}`;
-        const eventId = `anomaly:${a.series}:${a.date}`;
-        await this.core.startExecution(orgId, ref, { anomaly: a, series: a.series, date: a.date, delta: a.delta }, { eventId, actor: `trigger:${w.id}` });
-        started.push({ executionId: this.core.engine.executionId(ref, eventId), workflow: ref, anomaly: eventId });
+    const started: { executionId: string; workflow: string; anomaly?: string; event: string }[] = [];
+    const fire = async (w: any, eventId: string, input: any) => {
+      const ref = `${w.id}@${w.version}`;
+      await this.core.startExecution(orgId, ref, input, { eventId, actor: `trigger:${w.id}` });
+      started.push({ executionId: this.core.engine.executionId(ref, eventId), workflow: ref, anomaly: eventId, event: eventId });
+    };
+    const wanted = (type: string) => [...latest.values()].filter((w) => w.trigger?.type === type);
+
+    if (wanted('anomaly.detected').length) {
+      const anomalies = await this.detectAnomalies(orgId, 'service', 'open');
+      for (const w of wanted('anomaly.detected')) {
+        for (const a of anomalies.filter((x: any) => matches(w.trigger.filter, x))) {
+          await fire(w, `anomaly:${a.series}:${a.date}`, { anomaly: a, series: a.series, date: a.date, delta: a.delta });
+        }
+      }
+    }
+    if (wanted('budget.threshold').length) {
+      const statuses = await this.budgetStatuses(orgId);
+      for (const w of wanted('budget.threshold')) {
+        const f = w.trigger.filter ?? {};
+        const min = typeof f.minThreshold === 'number' ? f.minThreshold : 0.8;
+        for (const s of statuses) {
+          if (!s.events || (f.scope_type && f.scope_type !== s.scope_type) || (f.scope_value && f.scope_value !== s.scope_value)) continue;
+          for (const ev of s.events.filter((e: any) => e.threshold >= min)) {
+            await fire(w, `budget:${s.id}:${ev.threshold}`, { budget: { id: s.id, scope_type: s.scope_type, scope_value: s.scope_value, month: s.month, amount: s.amount },
+              threshold: ev.threshold, pct: ev.pct, spent: ev.spent, status: s.status, projected: s.projected });
+          }
+        }
       }
     }
     return started;
@@ -117,21 +166,56 @@ export class AppController {
   }
 
   @Get('anomalies')
-  async anomalies(@Req() req: Req_, @Query('key') key = 'service') {
-    const series = await dailySeries(this.core.store, req.user.orgId, key);
-    return this.analytics('/v1/anomalies', { series });
+  anomalies(@Req() req: Req_, @Query('key') key = 'service', @Query('status') status?: string) {
+    if (status && !['open', 'acknowledged'].includes(status)) throw new BadRequestException('status must be open|acknowledged');
+    return this.detectAnomalies(req.user.orgId, key, status);
   }
 
+  @Post('anomalies/:id/ack') @Roles('analyst') @HttpCode(200)
+  async ackAnomaly(@Req() req: Req_, @Param('id') id: string) {
+    if (!(await acknowledgeAnomaly(this.core.store, req.user.orgId, id, req.user.id))) throw new NotFoundException('unknown anomaly');
+    return { id, status: 'acknowledged' };
+  }
+
+  /** Create or update a budget. Scope: total (default) or one project/service/environment. */
   @Put('budgets/:month') @Roles('analyst')
-  async setBudget(@Req() req: Req_, @Param('month') month: string, @Body() b: { amount?: number }) {
-    if (!MONTH.test(month) || !(typeof b.amount === 'number' && b.amount > 0)) throw new BadRequestException('month=YYYY-MM and positive amount required');
-    await this.core.store.pool.query('INSERT INTO organizations (id, name) VALUES ($1,$1) ON CONFLICT DO NOTHING', [req.user.orgId]);
-    await this.core.store.tx(req.user.orgId, (c: any) => c.query(
-      `INSERT INTO budgets (org_id,id,name,month,amount) VALUES ($1,$2,'total',$2,$3)
-       ON CONFLICT (org_id,id) DO UPDATE SET amount=EXCLUDED.amount`, [req.user.orgId, month, b.amount]));
-    return { month, amount: b.amount };
+  async setBudget(@Req() req: Req_, @Param('month') month: string,
+    @Body() b: { amount?: number; scope_type?: string; scope_value?: string; thresholds?: number[] }) {
+    const scope_type = b?.scope_type ?? 'total';
+    const scope_value = scope_type === 'total' ? '' : String(b?.scope_value ?? '');
+    const thresholds = b?.thresholds ?? [0.5, 0.8, 1];
+    if (!MONTH.test(month) || !(typeof b?.amount === 'number' && Number.isFinite(b.amount) && b.amount > 0)) throw new BadRequestException('month=YYYY-MM and positive amount required');
+    if (!SCOPE_TYPES.includes(scope_type)) throw new BadRequestException(`scope_type must be one of ${SCOPE_TYPES.join(', ')}`);
+    if (scope_type !== 'total' && (!scope_value || scope_value.length > 100)) throw new BadRequestException('scope_value is required (max 100 chars) for a scoped budget');
+    if (!Array.isArray(thresholds) || thresholds.length > 10 || thresholds.some((t) => typeof t !== 'number' || !(t > 0 && t <= 10))) throw new BadRequestException('thresholds must be up to 10 numbers in (0, 10]');
+    await upsertBudget(this.core.store, req.user.orgId, { month, amount: b.amount, scope_type, scope_value, thresholds });
+    return { id: budgetId(month, scope_type, scope_value), month, amount: b.amount, scope_type, scope_value, thresholds };
   }
 
+  @Get('budgets/status')
+  budgetStatus(@Req() req: Req_, @Query('month') month?: string, @Query('as_of') asOf?: string) {
+    if ((month && !MONTH.test(month)) || (asOf && !DATE.test(asOf))) throw new BadRequestException('month=YYYY-MM, as_of=YYYY-MM-DD');
+    return this.budgetStatuses(req.user.orgId, month, asOf);
+  }
+
+  /** Showback by owner/project with tag-coverage: how much of the spend can be attributed to someone. */
+  @Get('costs/allocation')
+  costsAllocation(@Req() req: Req_, @Query('by') by = 'owner', @Query('from') from?: string, @Query('to') to?: string) {
+    if ((from && !DATE.test(from)) || (to && !DATE.test(to))) throw new BadRequestException('from/to must be YYYY-MM-DD');
+    return allocation(this.core.store, req.user.orgId, by, from, to);
+  }
+
+  @Get('costs/variance')
+  async costsVariance(@Req() req: Req_, @Query('as_of') asOf?: string) {
+    const series = await dailySeries(this.core.store, req.user.orgId, 'service');
+    const days = Object.values(series).flatMap((s) => Object.keys(s)).sort();
+    if (!days.length) throw new BadRequestException('no cost data imported');
+    const as_of = asOf ?? days[days.length - 1];
+    if (!DATE.test(as_of)) throw new BadRequestException('as_of must be YYYY-MM-DD');
+    return this.analytics('/v1/variance', { series, as_of });
+  }
+
+  /** Every forecast is stored with its method, interval and assumptions. */
   @Get('forecasts')
   async forecasts(@Req() req: Req_, @Query('as_of') asOf?: string, @Query('budget') budget?: string) {
     const series = await dailySeries(this.core.store, req.user.orgId, 'service');
@@ -144,11 +228,16 @@ export class AppController {
     let b = budget ? Number(budget) : undefined;
     if (b !== undefined && !(b > 0)) throw new BadRequestException('budget must be positive');
     if (b === undefined) {
-      const r = await this.core.store.tx(req.user.orgId, (c: any) => c.query('SELECT amount::float8 a FROM budgets WHERE org_id=$1 AND id=$2', [req.user.orgId, as_of.slice(0, 7)]));
+      const r = await this.core.store.tx(req.user.orgId, (c: any) => c.query(
+        "SELECT amount::float8 a FROM budgets WHERE org_id=$1 AND month=$2 AND scope_type='total'", [req.user.orgId, as_of.slice(0, 7)]));
       b = r.rows[0]?.a;
     }
-    return this.analytics('/v1/forecast', { series: total, as_of, budget: b });
+    const f = await this.analytics('/v1/forecast', { series: total, as_of, budget: b });
+    return { ...f, id: await saveForecast(this.core.store, req.user.orgId, f, req.user.id) };
   }
+
+  @Get('forecasts/history')
+  forecastHistory(@Req() req: Req_, @Query('limit') limit = '20') { return listForecasts(this.core.store, req.user.orgId, Number(limit) || 20); }
 
   // ---------- recommendations & simulation ----------
   @Get('recommendations')

@@ -18,6 +18,9 @@ Each control below names the code that enforces it and the test that proves it.
 | Concurrent decisions on one approval: exactly one wins (atomic check-and-set; `SELECT ... FOR UPDATE` in Postgres) | `Store.update`, `Engine.decide` | `postgres: concurrent approvals — exactly one decision wins` |
 | Provider access split by credential: sync uses a read-only token; the apply step uses a separate scoped write token that the provider itself limits (only the approval tag; delete only if tagged and unattached; idempotent) | `provider.ts`, `providers/localcloud/server.mjs` | `localcloud.test.mjs`, `sync uses only the read-only token; remediation really deletes the approved orphan, once` |
 | Cloudflare adapter: separate read and write tokens (write token must differ from the read token), emptiness re-checked immediately before deleting (TOCTOU guard), 404 on delete treated as already-absent | `api/src/cloudflare.ts` | `adapter: pagination, transient vs permanent errors...`, `platform: only the empty namespace is recommended...` |
+| Budget and cost-model inputs are validated (month, scope, thresholds); scope columns come from a fixed map and values are bound parameters, so SQL-injection-shaped values are stored as plain data | `finance.ts` (`scopedSeries`, `allocation`), `setBudget` | `budget validation and roles` |
+| Writing budgets and acknowledging anomalies requires the analyst role | `@Roles('analyst')` | `budget validation and roles`, `anomalies are persisted entities...` |
+| Cost-model tables (`anomalies`, `forecast_snapshots`, `budgets`) are covered by the same row-level security | `db/schema.sql` | `tenant isolation for the cost model` |
 | The remediation credential never appears in execution state or audit | `redact`, `Engine.secrets` | same e2e test (`credential never appears in execution state`) |
 | Decisions cannot be replayed; approver role, tenant and separation of duties are enforced by the engine behind the REST endpoint | `Engine.decide`, `EngineErrorFilter` (403/404/400) | `workflow pauses for approval; only an authorised other user can approve...` |
 | Secrets live outside workflow definitions (`credentialRef`), resolved at run time, masked in step logs, errors and audit | `redact`, `Engine.secrets` | `secrets are masked in logs and audit` |
@@ -27,7 +30,7 @@ Each control below names the code that enforces it and the test that proves it.
 ## Least privilege (connector contract)
 
 * **Analysis credentials**: read-only (`PROVIDER_READ_TOKEN`). They are never given to `apply_plan`.
-* **Remediation credentials**: a separate `credentialRef` (`CRED_CRED_REMEDIATION_SCOPED`) with narrowly scoped permissions, attached only to the `apply_plan` node. `infra/examples/aws-terraform/` shows the same split as AWS IAM roles (unused example; validated with `terraform validate` but never applied).
+* **Remediation credentials**: a separate `credentialRef` (`CRED_CRED_REMEDIATION_SCOPED`) with narrowly scoped permissions, attached only to the `apply_plan` node. An AWS IAM version of the same split was kept, unused, in `_to_delete/aws-terraform/`.
 
 ## Known limits (be honest)
 

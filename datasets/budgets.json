@@ -1,0 +1,35 @@
+{
+  "budgets": [
+    {
+      "scope_type": "total",
+      "scope_value": "",
+      "month": "2026-09",
+      "amount": 9000
+    },
+    {
+      "scope_type": "service",
+      "scope_value": "Compute",
+      "month": "2026-09",
+      "amount": 3500
+    },
+    {
+      "scope_type": "service",
+      "scope_value": "Database",
+      "month": "2026-09",
+      "amount": 2000
+    },
+    {
+      "scope_type": "service",
+      "scope_value": "ObjectStorage",
+      "month": "2026-09",
+      "amount": 1500
+    },
+    {
+      "scope_type": "service",
+      "scope_value": "Functions",
+      "month": "2026-09",
+      "amount": 600
+    }
+  ],
+  "note": "synthetic data"
+}

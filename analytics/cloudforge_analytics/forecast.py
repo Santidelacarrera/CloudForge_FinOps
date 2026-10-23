@@ -4,12 +4,13 @@ from __future__ import annotations
 import calendar
 import math
 from datetime import date
+from decimal import Decimal
 from statistics import mean, pstdev
 
 METHOD = "trailing_mean_normal_interval"
 
 
-def forecast_month_end(series: dict[date, "Decimal"], as_of: date, window: int = 14,
+def forecast_month_end(series: dict[date, Decimal], as_of: date, window: int = 14,
                        budget: float | None = None) -> dict:
     """Project spend at month end from month-to-date actuals.
 

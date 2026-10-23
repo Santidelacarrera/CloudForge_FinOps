@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from decimal import Decimal
 from statistics import median
 
 METHOD = "rolling_median_mad"
 MAD_SCALE = 1.4826  # makes MAD comparable to a standard deviation for normal data
 
 
-def detect(series: dict[date, "Decimal"], window: int = 14, threshold: float = 3.5,
+def detect(series: dict[date, Decimal], window: int = 14, threshold: float = 3.5,
            min_abs_delta: float = 10.0, min_history: int = 7) -> list[dict]:
     """Flag days whose cost deviates from the median of the previous ``window`` days.
 
